@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -484,7 +486,7 @@ func (h *SettingHandler) GetWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), cfg))
+	response.Success(c, service.SanitizeWebSearchConfig(c.Request.Context(), cfg))
 }
 
 // UpdateWebSearchEmulationConfig 更新 Web Search 模拟配置
@@ -507,7 +509,64 @@ func (h *SettingHandler) UpdateWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), updated))
+	response.Success(c, service.SanitizeWebSearchConfig(c.Request.Context(), updated))
+}
+
+// StartDevinOAuth begins an administrator-bound PKCE flow.
+func (h *SettingHandler) StartDevinOAuth(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Error(c, 401, "administrator identity is required")
+		return
+	}
+	flow, err := h.settingService.StartDevinOAuth(subject.UserID)
+	if err != nil {
+		writeDevinOAuthError(c, err)
+		return
+	}
+	response.Success(c, flow)
+}
+
+// CompleteDevinOAuth exchanges a one-use authorization code without returning the session token.
+func (h *SettingHandler) CompleteDevinOAuth(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Error(c, 401, "administrator identity is required")
+		return
+	}
+	var req struct {
+		ID   string `json:"id" binding:"required,max=128"`
+		Code string `json:"code" binding:"required,max=8192"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid authorization request")
+		return
+	}
+	status, err := h.settingService.CompleteDevinOAuth(c.Request.Context(), subject.UserID, req.ID, req.Code)
+	if err != nil {
+		writeDevinOAuthError(c, err)
+		return
+	}
+	response.Success(c, status)
+}
+
+// DisconnectDevinOAuth removes the Devin provider credential from global search settings.
+func (h *SettingHandler) DisconnectDevinOAuth(c *gin.Context) {
+	status, err := h.settingService.DisconnectDevinOAuth(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, status)
+}
+
+func writeDevinOAuthError(c *gin.Context, err error) {
+	var oauthErr *service.DevinOAuthError
+	if errors.As(err, &oauthErr) {
+		response.Error(c, oauthErr.StatusCode, oauthErr.Message)
+		return
+	}
+	response.ErrorFrom(c, err)
 }
 
 // ResetWebSearchUsage 重置指定 provider 的配额用量

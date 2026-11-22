@@ -15,3 +15,11 @@ func TestValidateWebSearchConfig_AcceptsExa(t *testing.T) {
 	}
 	require.NoError(t, validateWebSearchConfig(cfg))
 }
+
+func TestValidateWebSearchConfig_AcceptsDisconnectedDevinProvider(t *testing.T) {
+	cfg := &WebSearchEmulationConfig{
+		Enabled:   true,
+		Providers: []WebSearchProviderConfig{{Type: "devin"}},
+	}
+	require.NoError(t, validateWebSearchConfig(cfg))
+}

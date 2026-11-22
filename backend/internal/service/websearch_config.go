@@ -20,7 +20,7 @@ type WebSearchEmulationConfig struct {
 	Providers []WebSearchProviderConfig `json:"providers"`
 }
 
-// WebSearchProviderConfig describes a single search provider (Brave, Tavily or Exa).
+// WebSearchProviderConfig describes a configured web-search provider.
 type WebSearchProviderConfig struct {
 	Type             string `json:"type"`                    // websearch.ProviderTypeBrave | Tavily | Exa
 	APIKey           string `json:"api_key,omitempty"`       // secret — omitted in API responses
@@ -40,6 +40,7 @@ var validProviderTypes = map[string]bool{
 	websearch.ProviderTypeBrave:  true,
 	websearch.ProviderTypeTavily: true,
 	websearch.ProviderTypeExa:    true,
+	websearch.ProviderTypeDevin:  true,
 }
 
 func validateWebSearchConfig(cfg *WebSearchEmulationConfig) error {
@@ -154,7 +155,7 @@ func (s *SettingService) SaveWebSearchEmulationConfig(ctx context.Context, cfg *
 	// After merge, validate all enabled providers have API keys
 	if cfg.Enabled {
 		for _, p := range cfg.Providers {
-			if p.APIKey == "" {
+			if p.APIKey == "" && p.Type != websearch.ProviderTypeDevin {
 				return infraerrors.BadRequest("MISSING_API_KEY",
 					fmt.Sprintf("provider %s has no API key configured", p.Type))
 			}

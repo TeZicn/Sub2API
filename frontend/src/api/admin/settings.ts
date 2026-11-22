@@ -1558,7 +1558,7 @@ export async function updateBetaPolicySettings(
 // --- Web Search Emulation Config ---
 
 export interface WebSearchProviderConfig {
-  type: "brave" | "tavily" | "exa";
+  type: "brave" | "tavily" | "exa" | "devin";
   api_key: string;
   api_key_configured: boolean;
   quota_limit: number | null;
@@ -1577,6 +1577,16 @@ export interface WebSearchTestResult {
   provider: string;
   results: { url: string; title: string; snippet: string; page_age?: string }[];
   query: string;
+}
+
+export interface DevinOAuthStart {
+  id: string;
+  url: string;
+  expires_at: number;
+}
+
+export interface DevinOAuthStatus {
+  connected: boolean;
 }
 
 export async function getWebSearchEmulationConfig(): Promise<WebSearchEmulationConfig> {
@@ -1615,6 +1625,31 @@ export async function resetWebSearchUsage(payload: {
   );
 }
 
+export async function startDevinOAuth(): Promise<DevinOAuthStart> {
+  const { data } = await apiClient.post<DevinOAuthStart>(
+    "/admin/settings/web-search-emulation/devin/start",
+  );
+  return data;
+}
+
+export async function completeDevinOAuth(payload: {
+  id: string;
+  code: string;
+}): Promise<DevinOAuthStatus> {
+  const { data } = await apiClient.post<DevinOAuthStatus>(
+    "/admin/settings/web-search-emulation/devin/complete",
+    payload,
+  );
+  return data;
+}
+
+export async function disconnectDevinOAuth(): Promise<DevinOAuthStatus> {
+  const { data } = await apiClient.delete<DevinOAuthStatus>(
+    "/admin/settings/web-search-emulation/devin",
+  );
+  return data;
+}
+
 export const settingsAPI = {
   getSettings,
   updateSettings,
@@ -1646,6 +1681,9 @@ export const settingsAPI = {
   updateWebSearchEmulationConfig,
   testWebSearchEmulation,
   resetWebSearchUsage,
+  startDevinOAuth,
+  completeDevinOAuth,
+  disconnectDevinOAuth,
 };
 
 export default settingsAPI;

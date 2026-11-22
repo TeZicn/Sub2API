@@ -153,7 +153,20 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}()
 	beginUpstreamResponseModelObservation(c)
 
-	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
+	if account != nil && shouldProcessDeepSeekWebSearch(ctx, parsed.Body.Bytes()) {
+		if shouldEmulateDeepSeekWebSearchFor(ctx, s.settingService, s.channelService, account, parsed.GroupID, parsed.Body.Bytes()) {
+			return s.handleDeepSeekSmartSearch(ctx, c, account, parsed)
+		}
+		filteredBody, err := removeDeepSeekWebSearchTools(parsed.Body.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("remove disabled web search tool: %w", err)
+		}
+		if err := parsed.ReplaceBody(filteredBody); err != nil {
+			return nil, fmt.Errorf("remove disabled web search tool: %w", err)
+		}
+	}
+
+	// Legacy Web Search emulation: plain web_search requests retain the existing behavior.
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
 	}

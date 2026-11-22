@@ -72,6 +72,30 @@ func shouldEmulateWebSearchFor(
 	if !isOnlyWebSearchToolInBody(body) {
 		return false
 	}
+	return isWebSearchEmulationEnabledFor(ctx, settingService, channelService, account, groupID)
+}
+
+func shouldEmulateDeepSeekWebSearchFor(
+	ctx context.Context, settingService *SettingService, channelService *ChannelService,
+	account *Account, groupID *int64, body []byte,
+) bool {
+	if getWebSearchManager() == nil || account == nil || settingService == nil || !hasDeepSeekWebSearchTool(body) {
+		return false
+	}
+	if gjson.GetBytes(body, "tool_choice").String() == "none" ||
+		gjson.GetBytes(body, "tool_choice.type").String() == "none" {
+		return false
+	}
+	if account.Platform == PlatformOpenAI && account.Type != AccountTypeAPIKey {
+		return false
+	}
+	return isWebSearchEmulationEnabledFor(ctx, settingService, channelService, account, groupID)
+}
+
+func isWebSearchEmulationEnabledFor(
+	ctx context.Context, settingService *SettingService, channelService *ChannelService,
+	account *Account, groupID *int64,
+) bool {
 	if !settingService.IsWebSearchEmulationEnabled(ctx) {
 		return false
 	}
@@ -92,6 +116,22 @@ func shouldEmulateWebSearchFor(
 		}
 		return ch.IsWebSearchEmulationEnabled(account.Platform)
 	}
+}
+
+func hasDeepSeekWebSearchTool(body []byte) bool {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return false
+	}
+	matched := false
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		if tool.Get("type").String() == "deepseek_web_search" || tool.Get("name").String() == "deepseek_web_search" {
+			matched = true
+			return false
+		}
+		return true
+	})
+	return matched
 }
 
 // isOnlyWebSearchToolInBody checks if the body contains exactly one web_search tool.

@@ -615,6 +615,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.PUT("/web-search-emulation", h.Admin.Setting.UpdateWebSearchEmulationConfig)
 		adminSettings.POST("/web-search-emulation/test", h.Admin.Setting.TestWebSearchEmulation)
 		adminSettings.POST("/web-search-emulation/reset-usage", h.Admin.Setting.ResetWebSearchUsage)
+		adminSettings.POST("/web-search-emulation/devin/start", h.Admin.Setting.StartDevinOAuth)
+		adminSettings.POST("/web-search-emulation/devin/complete", h.Admin.Setting.CompleteDevinOAuth)
+		adminSettings.DELETE("/web-search-emulation/devin", h.Admin.Setting.DisconnectDevinOAuth)
 	}
 }
 

@@ -5958,11 +5958,15 @@
                         />
                       </svg>
                       <Select
-                        v-model="provider.type"
+                        :model-value="provider.type"
+                        @update:model-value="
+                          setWebSearchProviderType(provider, $event)
+                        "
                         :options="[
                           { value: 'brave', label: 'Brave Search' },
                           { value: 'tavily', label: 'Tavily' },
                           { value: 'exa', label: 'Exa' },
+                          { value: 'devin', label: 'Devin' },
                         ]"
                         class="w-36"
                         @click.stop
@@ -6007,8 +6011,77 @@
                     v-if="expandedProviders[pIdx]"
                     class="space-y-3 border-t border-gray-100 px-4 pb-4 pt-3 dark:border-dark-700"
                   >
+                    <div
+                      v-if="provider.type === 'devin'"
+                      class="space-y-3 rounded-lg bg-gray-50 p-3 dark:bg-dark-700"
+                    >
+                      <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                            {{ t("admin.settings.webSearchEmulation.devinDescription") }}
+                          </p>
+                          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            {{
+                              t(
+                                provider.api_key_configured
+                                  ? "admin.settings.webSearchEmulation.devinConnected"
+                                  : "admin.settings.webSearchEmulation.devinConnect",
+                              )
+                            }}
+                          </p>
+                        </div>
+                        <button
+                          v-if="provider.api_key_configured"
+                          type="button"
+                          class="btn btn-secondary btn-sm"
+                          @click.stop="disconnectDevinProvider"
+                        >
+                          {{ t("admin.settings.webSearchEmulation.devinDisconnect") }}
+                        </button>
+                        <button
+                          v-else
+                          type="button"
+                          class="btn btn-primary btn-sm"
+                          :disabled="devinOAuthLoading"
+                          @click.stop="startDevinAuthorization"
+                        >
+                          {{ t("admin.settings.webSearchEmulation.devinConnect") }}
+                        </button>
+                      </div>
+                      <div v-if="devinOAuthURL" class="space-y-2 border-t border-gray-200 pt-3 dark:border-dark-600">
+                        <a
+                          :href="devinOAuthURL"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="text-sm font-medium text-primary-600 hover:underline dark:text-primary-400"
+                        >
+                          {{ t("admin.settings.webSearchEmulation.devinOpenAuthorization") }}
+                        </a>
+                        <label class="block text-xs text-gray-500">
+                          {{ t("admin.settings.webSearchEmulation.devinAuthorizationCode") }}
+                        </label>
+                        <div class="flex flex-wrap gap-2">
+                          <input
+                            v-model="devinOAuthCode"
+                            type="password"
+                            autocomplete="off"
+                            class="input min-w-0 flex-1 text-sm"
+                            :placeholder="t('admin.settings.webSearchEmulation.devinAuthorizationCodePlaceholder')"
+                          />
+                          <button
+                            type="button"
+                            class="btn btn-primary btn-sm"
+                            :disabled="devinOAuthLoading || !devinOAuthCode.trim()"
+                            @click.stop="completeDevinAuthorization"
+                          >
+                            {{ t("admin.settings.webSearchEmulation.devinCompleteAuthorization") }}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
                     <!-- API Key with inline show/copy -->
-                    <div>
+                    <div v-else>
                       <label class="text-xs text-gray-500">{{
                         t("admin.settings.webSearchEmulation.apiKey")
                       }}</label>
@@ -10275,6 +10348,10 @@ const wsTestQuery = ref("");
 const wsTestLoading = ref(false);
 const wsTestResult = ref<WebSearchTestResult | null>(null);
 const wsTestDialogOpen = ref(false);
+const devinOAuthID = ref("");
+const devinOAuthURL = ref("");
+const devinOAuthCode = ref("");
+const devinOAuthLoading = ref(false);
 
 function openTestDialog() {
   wsTestResult.value = null;
@@ -10283,6 +10360,24 @@ function openTestDialog() {
 
 function toggleProviderExpand(idx: number) {
   expandedProviders[idx] = !expandedProviders[idx];
+}
+
+function setWebSearchProviderType(
+  provider: WebSearchProviderConfig,
+  type: unknown,
+) {
+  if (
+    type !== "brave" &&
+    type !== "tavily" &&
+    type !== "exa" &&
+    type !== "devin"
+  ) {
+    return;
+  }
+  if (provider.type === type) return;
+  provider.type = type;
+  provider.api_key = "";
+  provider.api_key_configured = false;
 }
 
 function removeWebSearchProvider(idx: number) {
@@ -10384,6 +10479,60 @@ async function testWebSearchProvider() {
     appStore.showError(extractApiErrorMessage(err, t("common.error")));
   } finally {
     wsTestLoading.value = false;
+  }
+}
+
+async function startDevinAuthorization() {
+  devinOAuthLoading.value = true;
+  devinOAuthCode.value = "";
+  devinOAuthURL.value = "";
+  try {
+    const flow = await adminAPI.settings.startDevinOAuth();
+    devinOAuthID.value = flow.id;
+    devinOAuthURL.value = flow.url;
+    appStore.showSuccess(
+      t("admin.settings.webSearchEmulation.devinAuthorizationStarted"),
+    );
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t("common.error")));
+  } finally {
+    devinOAuthLoading.value = false;
+  }
+}
+
+async function completeDevinAuthorization() {
+  if (!devinOAuthID.value || !devinOAuthCode.value.trim()) return;
+  devinOAuthLoading.value = true;
+  try {
+    await adminAPI.settings.completeDevinOAuth({
+      id: devinOAuthID.value,
+      code: devinOAuthCode.value.trim(),
+    });
+    devinOAuthID.value = "";
+    devinOAuthURL.value = "";
+    devinOAuthCode.value = "";
+    await loadWebSearchConfig();
+    appStore.showSuccess(
+      t("admin.settings.webSearchEmulation.devinAuthorizationSuccess"),
+    );
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t("common.error")));
+  } finally {
+    devinOAuthLoading.value = false;
+  }
+}
+
+async function disconnectDevinProvider() {
+  if (!confirm(t("admin.settings.webSearchEmulation.devinDisconnectConfirm")))
+    return;
+  try {
+    await adminAPI.settings.disconnectDevinOAuth();
+    devinOAuthID.value = "";
+    devinOAuthURL.value = "";
+    devinOAuthCode.value = "";
+    await loadWebSearchConfig();
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t("common.error")));
   }
 }
 

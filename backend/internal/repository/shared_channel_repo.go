@@ -43,7 +43,7 @@ func (r *sharedChannelRepository) List(ctx context.Context) ([]service.SharedCha
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]service.SharedChannel, 0)
 	for rows.Next() {
@@ -73,7 +73,7 @@ func (r *sharedChannelRepository) ListPublished(ctx context.Context, userID int6
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]service.PublishedSharedChannel, 0)
 	positions := make(map[int64]int)
@@ -126,7 +126,7 @@ func (r *sharedChannelRepository) ListPublished(ctx context.Context, userID int6
 	if err != nil {
 		return nil, err
 	}
-	defer stats.Close()
+	defer func() { _ = stats.Close() }()
 	for stats.Next() {
 		var id int64
 		var hour service.SharedChannelHour
@@ -144,7 +144,7 @@ func sharedQueryOne(ctx context.Context, client *dbent.Client, query string, arg
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if rows.Next() {
 		return rows.Scan(dest...)
 	}
@@ -182,7 +182,7 @@ func (r *sharedChannelRepository) Save(ctx context.Context, id int64, in service
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return nil, err
@@ -328,7 +328,7 @@ func (r *sharedChannelRepository) ListMemberships(ctx context.Context, userID in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var items []service.SharedChannelMembership
 	for rows.Next() {
 		var m service.SharedChannelMembership

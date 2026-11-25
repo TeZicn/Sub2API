@@ -239,7 +239,7 @@ func lockUsageBillingSharedChannels(ctx context.Context, tx *sql.Tx, cmds []*ser
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {

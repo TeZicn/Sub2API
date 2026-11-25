@@ -37,7 +37,7 @@
         </div>
       </section>
 
-      <JoinFreeChannelDialog v-if="selectedChannel" :show="showJoinDialog" :channel="selectedChannel" :loading="creatingKey" :error="createError" :created-key="createdKey" :preview="previewMode" @close="closeJoinDialog" @confirm-preview="handleJoin" />
+      <JoinFreeChannelDialog v-if="selectedChannel" :show="showJoinDialog" :channel="selectedChannel" :api-base-url="appStore.apiBaseUrl" :loading="creatingKey" :error="createError" :created-key="createdKey" :preview="previewMode" @close="closeJoinDialog" @confirm-preview="handleJoin" />
     </div>
   </AppLayout>
 </template>
@@ -46,6 +46,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useIntervalFn, useNow } from '@vueuse/core'
+import { useAppStore } from '@/stores/app'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import FreeChannelCard from '@/components/user/free-channels/FreeChannelCard.vue'
@@ -54,8 +55,9 @@ import * as sharedChannelsAPI from '@/api/sharedChannels'
 import type { SharedChannel } from '@/api/sharedChannels'
 
 type FilterValue = 'all' | 'open' | 'joined' | 'full'
-type CardChannel = import('@/components/user/free-channels/freeChannelsMock').FreeChannelMock & { apiID?: number; currentShare?: number; budgetLimit?: number | null; budgetUsed?: number }
+type CardChannel = import('@/components/user/free-channels/freeChannelsMock').FreeChannelMock & { apiID?: number; budgetLimit?: number | null; budgetUsed?: number }
 const { t, locale } = useI18n()
+const appStore = useAppStore()
 const channels = ref<CardChannel[]>([])
 const searchQuery = ref('')
 const activeFilter = ref<FilterValue>('all')
@@ -103,7 +105,7 @@ useIntervalFn(() => {
 onMounted(async () => {
   if (previewMode) {
     const { freeChannelSamples } = await import('@/components/user/free-channels/freeChannelsMock')
-    channels.value = freeChannelSamples.map(channel => ({ ...channel, personalConcurrency: 5, usernames: [...channel.usernames], hourlyStatuses: channel.hourlyStatuses.map(hour => ({ ...hour })) }))
+    channels.value = freeChannelSamples.map(channel => ({ ...channel, usernames: [...channel.usernames], hourlyStatuses: channel.hourlyStatuses.map(hour => ({ ...hour })) }))
     return
   }
   await load()
@@ -150,7 +152,6 @@ function toCardChannel(channel: SharedChannel): CardChannel {
     currentUserJoined: channel.joined,
     hourlyStatuses,
     apiID: channel.id,
-    currentShare: channel.share,
   } as CardChannel
 }
 function countByAvailability(availability: FilterValue) {

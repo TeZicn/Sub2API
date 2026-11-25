@@ -4,8 +4,13 @@ import { createI18n } from 'vue-i18n'
 import en from '@/i18n/locales/en'
 import SharedChannelsView from '../SharedChannelsView.vue'
 import * as sharedChannelAPI from '@/api/admin/sharedChannels'
+import SharedChannelModelPicker from '@/components/admin/shared-channels/SharedChannelModelPicker.vue'
 
 vi.mock('@/api/admin/sharedChannels', () => ({ list: vi.fn(async () => []), save: vi.fn(async () => ({})), remove: vi.fn(async () => {}) }))
+vi.mock('@/api/admin/accounts', () => {
+  const api = { list: vi.fn(async () => ({ items: [], pages: 1 })), syncUpstreamModels: vi.fn() }
+  return { ...api, default: api }
+})
 vi.mock('@/api/admin/groups', () => {
   const getAll = vi.fn(async () => [
     { id: 1, name: 'Exclusive group', platform: 'openai', status: 'active', is_exclusive: true, subscription_type: 'standard' },
@@ -50,7 +55,7 @@ describe('SharedChannelsView end modes', () => {
     expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
     expect(wrapper.find('button[form="shared-channel-form"]').exists()).toBe(true)
     await wrapper.find('input[maxlength="100"]').setValue('Shared service')
-    await wrapper.find('textarea').setValue(' model-a,model-b\nmodel-a，Display name ')
+    wrapper.findComponent(SharedChannelModelPicker).vm.$emit('update:modelValue', ['model-a', 'model-b', 'Display name'])
     await wrapper.find('select').setValue('1')
     await wrapper.find('input[value="budget"]').setValue(true)
     expect(wrapper.find('input[type="datetime-local"]').exists()).toBe(false)

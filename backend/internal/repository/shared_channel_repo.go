@@ -22,7 +22,7 @@ const sharedChannelFields = `p.id, p.name, p.group_id, p.max_concurrency, p.expi
 const sharedChannelJoin = ` FROM shared_channel_publications p JOIN groups g ON g.id = p.group_id `
 
 // 所有展示和分配查询共用同一活跃窗口，避免名单与请求份额不一致。
-const sharedMembershipActive = `ended_at IS NULL AND last_active_at > statement_timestamp() - interval '5 minutes'`
+const sharedMembershipActive = `ended_at IS NULL AND last_active_at > statement_timestamp() - interval '2 minutes'`
 
 type sharedChannelRepository struct {
 	client *dbent.Client
@@ -67,7 +67,7 @@ func (r *sharedChannelRepository) ListPublished(ctx context.Context, userID int6
 		`+sharedChannelJoin+`
 		JOIN users viewer ON viewer.id = $1 AND viewer.deleted_at IS NULL
 		LEFT JOIN LATERAL (
-			SELECT array_agg(u.username ORDER BY sm.rank) AS names,
+			SELECT array_agg(COALESCE(NULLIF(btrim(u.username), ''), split_part(u.email, '@', 1)) ORDER BY sm.rank) AS names,
 				max(sm.rank) FILTER (WHERE sm.user_id = $1) AS rank
 			FROM (
 				SELECT user_id, id, row_number() OVER (ORDER BY active_since, id) AS rank
@@ -100,6 +100,7 @@ func (r *sharedChannelRepository) ListPublished(ctx context.Context, userID int6
 	if err := rows.Err(); err != nil || len(ids) == 0 {
 		return result, err
 	}
+	// 沿用网关记录的错误归属，只统计最终上游失败；恢复成功的尝试和用户业务限制不影响状态。
 	stats, err := r.db.QueryContext(ctx, `WITH linked AS (
 		SELECT ak.id AS key_id, m.publication_id
 		FROM shared_channel_memberships m JOIN api_keys ak ON ak.shared_channel_membership_id = m.id
@@ -112,7 +113,8 @@ func (r *sharedChannelRepository) ListPublished(ctx context.Context, userID int6
 		SELECT k.publication_id, date_trunc('hour', e.created_at), TRUE FROM linked k
 		JOIN ops_error_logs e ON e.api_key_id = k.key_id
 		WHERE e.created_at >= date_trunc('hour', statement_timestamp()) - interval '23 hours'
-			AND e.status_code >= 400 AND e.error_phase IN ('request', 'internal')
+			AND e.status_code >= 400 AND e.status_code <> 499
+			AND e.error_owner = 'provider' AND NOT e.is_business_limited
 	), hours AS (
 		SELECT generate_series(date_trunc('hour', statement_timestamp()) - interval '23 hours',
 			date_trunc('hour', statement_timestamp()), interval '1 hour') AS bucket

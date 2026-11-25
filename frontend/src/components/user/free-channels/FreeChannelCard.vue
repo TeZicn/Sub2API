@@ -118,19 +118,9 @@
           </span>
         </div>
 
-        <div class="mt-3.5 grid gap-1.5" :style="{ gridTemplateColumns: `repeat(${meterSegments}, minmax(0, 1fr))` }" :aria-label="shareMeterLabel">
-          <span
-            v-for="slot in meterSegments"
-            :key="slot"
-            class="h-1.5 rounded-full transition-colors"
-            :class="shareSegmentClass(slot - 1)"
-            aria-hidden="true"
-          />
-        </div>
-
       </section>
 
-      <section ref="participantsRef" class="mt-5 min-h-[61px] min-w-0" :aria-label="t('freeChannels.participants')" @keydown.esc="selectedUsername = null">
+      <section ref="participantsRef" class="mt-5 min-h-[61px] min-w-0" :aria-label="t('freeChannels.participants')" @keydown.esc="selectedUserKey = null">
         <div class="flex items-center justify-between gap-2">
           <h3 class="text-[11px] font-semibold text-gray-600 dark:text-dark-200">{{ t('freeChannels.participants') }}</h3>
           <span v-if="channel.usernames.length" class="text-[10px] tabular-nums text-gray-400 dark:text-dark-400">
@@ -139,8 +129,8 @@
         </div>
         <div v-if="channel.usernames.length" class="mt-2.5 flex flex-wrap items-center gap-1.5">
           <div
-            v-for="(username, index) in visibleUsernames"
-            :key="username"
+            v-for="(participant, index) in visibleParticipants"
+            :key="participant.key"
             class="relative"
           >
             <button
@@ -148,12 +138,12 @@
               data-testid="shared-user-avatar"
               class="grid h-8 w-8 place-items-center rounded-full text-[11px] font-bold ring-2 ring-white transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-primary-500 dark:ring-dark-800"
               :class="avatarClass(index)"
-              :aria-label="t('freeChannels.viewUser', { name: username })"
-              :aria-expanded="selectedUsername === username"
-              :aria-describedby="selectedUsername === username ? `shared-user-${channel.id}-${index}` : undefined"
-              @click="selectedUsername = selectedUsername === username ? null : username"
-            >{{ avatarInitial(username) }}</button>
-            <div v-if="selectedUsername === username" :id="`shared-user-${channel.id}-${index}`" role="tooltip" class="absolute bottom-full left-0 z-20 mb-2 w-max max-w-[220px] break-all rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-800 shadow-lg dark:border-dark-600 dark:bg-dark-700 dark:text-white">{{ username }}</div>
+              :aria-label="t('freeChannels.viewUser', { name: participant.name })"
+              :aria-expanded="selectedUserKey === participant.key"
+              :aria-describedby="selectedUserKey === participant.key ? `shared-user-${channel.id}-${index}` : undefined"
+              @click="selectedUserKey = selectedUserKey === participant.key ? null : participant.key"
+            >{{ avatarInitial(participant.name) }}</button>
+            <div v-if="selectedUserKey === participant.key" :id="`shared-user-${channel.id}-${index}`" role="tooltip" class="absolute bottom-full left-0 z-20 mb-2 w-max max-w-[220px] break-all rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-800 shadow-lg dark:border-dark-600 dark:bg-dark-700 dark:text-white">{{ participant.name }}</div>
           </div>
           <button v-if="hiddenUserCount" type="button" class="h-8 rounded-full bg-gray-100 px-2.5 text-[10px] font-medium text-gray-500 hover:bg-gray-200 dark:bg-dark-700 dark:text-dark-300" :aria-label="t('freeChannels.morePeople', { count: hiddenUserCount })" @click="participantsExpanded = true">+{{ hiddenUserCount }}</button>
         </div>
@@ -185,11 +175,11 @@ import { useI18n } from 'vue-i18n'
 import { onClickOutside, useNow } from '@vueuse/core'
 import Icon from '@/components/icons/Icon.vue'
 import ProviderIcon from '@/components/user/monitor/ProviderIcon.vue'
-import { estimateConcurrencyShare, type FreeChannelMock } from './freeChannelsMock'
+import type { FreeChannelMock } from './freeChannelsMock'
 import FreeChannelStatusGrid from './FreeChannelStatusGrid.vue'
 
 const props = defineProps<{
-  channel: FreeChannelMock & { currentShare?: number }
+  channel: FreeChannelMock
 }>()
 
 const emit = defineEmits<{
@@ -201,9 +191,8 @@ const now = useNow({ interval: 1000 })
 const modelsExpanded = ref(false)
 const participantsExpanded = ref(false)
 const participantsRef = ref<HTMLElement | null>(null)
-const selectedUsername = ref<string | null>(null)
-onClickOutside(participantsRef, () => { selectedUsername.value = null })
-const meterSegments = computed(() => Math.min(20, props.channel.maxConcurrency))
+const selectedUserKey = ref<string | null>(null)
+onClickOutside(participantsRef, () => { selectedUserKey.value = null })
 const visibleModels = computed(() => modelsExpanded.value ? props.channel.models : props.channel.models.slice(0, 3))
 
 const providerLabel = computed(() => {
@@ -231,23 +220,6 @@ const availabilityDotClass = computed(() => {
   if (props.channel.availability === 'open') return 'bg-emerald-500'
   if (props.channel.availability === 'joined') return 'bg-primary-500'
   return 'bg-gray-400 dark:bg-dark-400'
-})
-
-const shareEstimate = computed(() => {
-  if (props.channel.currentShare != null) return { min: props.channel.currentShare, max: props.channel.currentShare }
-  const participantsBeforeJoin = props.channel.currentUserJoined
-    ? Math.max(0, props.channel.usernames.length - 1)
-    : props.channel.usernames.length
-  return estimateConcurrencyShare(props.channel.maxConcurrency, participantsBeforeJoin, props.channel.personalConcurrency)
-})
-
-const shareMeterLabel = computed(() => {
-  if (!shareEstimate.value) return t('freeChannels.capacityFull')
-  return t('freeChannels.shareMeterLabel', {
-    min: shareEstimate.value.min,
-    max: shareEstimate.value.max,
-    total: props.channel.maxConcurrency,
-  })
 })
 
 const expiryMs = computed(() => props.channel.expiresAt ? Date.parse(props.channel.expiresAt) - now.value.getTime() : null)
@@ -282,8 +254,11 @@ function formatMoney(value: number | null | undefined) {
   return new Intl.NumberFormat(locale.value, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value ?? 0)
 }
 
-const visibleUsernames = computed(() => participantsExpanded.value ? props.channel.usernames : props.channel.usernames.slice(0, 8))
-const hiddenUserCount = computed(() => Math.max(0, props.channel.usernames.length - visibleUsernames.value.length))
+const visibleParticipants = computed(() => {
+  const names = participantsExpanded.value ? props.channel.usernames : props.channel.usernames.slice(0, 8)
+  return names.map((name, index) => ({ name, key: `${index}:${name}` }))
+})
+const hiddenUserCount = computed(() => Math.max(0, props.channel.usernames.length - visibleParticipants.value.length))
 
 const buttonLabel = computed(() => {
   if (props.channel.availability === 'joined') return t('freeChannels.createAnotherKey')
@@ -292,14 +267,6 @@ const buttonLabel = computed(() => {
 
 const buttonIcon = computed(() => props.channel.availability === 'joined' ? 'key' : 'plus')
 const buttonClass = 'border-primary-200 bg-primary-50/90 text-primary-800 shadow-sm hover:-translate-y-0.5 hover:border-primary-300 hover:bg-primary-100 hover:shadow-md active:translate-y-0 dark:border-primary-800/80 dark:bg-primary-950/45 dark:text-primary-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/50'
-
-function shareSegmentClass(index: number) {
-  if (!shareEstimate.value) return 'bg-gray-300 dark:bg-dark-600'
-  const amount = index * props.channel.maxConcurrency / meterSegments.value
-  if (amount < shareEstimate.value.min) return 'bg-primary-600 dark:bg-primary-400'
-  if (amount < shareEstimate.value.max) return 'bg-primary-300 dark:bg-primary-700'
-  return 'bg-gray-200 dark:bg-dark-700'
-}
 
 function avatarClass(index: number) {
   const classes = [
@@ -311,6 +278,6 @@ function avatarClass(index: number) {
 }
 
 function avatarInitial(username: string) {
-  return username.slice(0, 1).toUpperCase()
+  return Array.from(username)[0]?.toUpperCase() ?? ''
 }
 </script>

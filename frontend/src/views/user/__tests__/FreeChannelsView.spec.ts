@@ -1,47 +1,31 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
+import { useAppStore } from '@/stores/app'
 
 import en from '@/i18n/locales/en'
-import { estimateConcurrencyShare } from '@/components/user/free-channels/freeChannelsMock'
+import { i18n as appI18n } from '@/i18n'
 import FreeChannelsView from '../FreeChannelsView.vue'
 import * as sharedChannelsAPI from '@/api/sharedChannels'
 import type { SharedChannel } from '@/api/sharedChannels'
 
 vi.mock('@/api/sharedChannels', () => ({ list: vi.fn(), createKey: vi.fn() }))
+appI18n.global.setLocaleMessage('en', en)
 enableAutoUnmount(afterEach)
 
-describe('free channel concurrency share', () => {
-  it('splits odd capacity as a range after a new user joins', () => {
-    expect(estimateConcurrencyShare(5, 1)).toEqual({ min: 2, max: 3 })
-  })
-
-  it('keeps one slot for a user joining a nearly full pool', () => {
-    expect(estimateConcurrencyShare(5, 4)).toEqual({ min: 1, max: 1 })
-  })
-
-  it('rejects a join when all concurrency slots already have users', () => {
-    expect(estimateConcurrencyShare(5, 5)).toBeNull()
-  })
-
-  it('caps shared requests by the existing personal limit', () => {
-    expect(estimateConcurrencyShare(8, 0, 5)).toEqual({ min: 5, max: 5 })
-    expect(estimateConcurrencyShare(8, 1, 5)).toEqual({ min: 4, max: 4 })
-    expect(estimateConcurrencyShare(8, 2, 5)).toEqual({ min: 2, max: 3 })
-    expect(estimateConcurrencyShare(8, 7, 5)).toEqual({ min: 1, max: 1 })
-  })
-})
-
 describe('FreeChannelsView', () => {
-  function mountView(preview = true) {
+  function mountView(preview = true, apiBaseUrl = '') {
     window.history.replaceState({}, '', preview ? '/free-channels?preview=1' : '/free-channels')
     const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
+    const pinia = createPinia()
+    useAppStore(pinia).apiBaseUrl = apiBaseUrl
     return mount(FreeChannelsView, {
       global: {
-        plugins: [i18n],
+        plugins: [i18n, pinia],
         stubs: {
           AppLayout: { template: '<div><slot /></div>' },
-          BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' },
+          BaseDialog: { name: 'BaseDialog', props: ['show', 'showCloseButton', 'closeOnEscape', 'closeOnClickOutside'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' },
         },
       },
     })
@@ -49,6 +33,7 @@ describe('FreeChannelsView', () => {
 
   it('renders a 24-hour request history for each sample channel', async () => {
     const wrapper = mountView()
+    await vi.dynamicImportSettled()
     await flushPromises()
     const cards = wrapper.findAll('[data-testid="free-channel-card"]')
 
@@ -93,6 +78,24 @@ describe('FreeChannelsView', () => {
     expect(avatar.attributes('aria-expanded')).toBe('true')
     await avatar.trigger('click')
     expect(card.find('[role="tooltip"]').exists()).toBe(false)
+  })
+
+  it('shows email prefixes from the API and opens only the clicked avatar for duplicate names', async () => {
+    vi.mocked(sharedChannelsAPI.list).mockResolvedValue([publishedChannel({ usernames: ['alice', 'bob', 'same-name', 'same-name'] })])
+    const wrapper = mountView(false)
+    await flushPromises()
+    const avatars = wrapper.findAll('[data-testid="shared-user-avatar"]')
+    expect(avatars).toHaveLength(4)
+    expect(avatars.every(avatar => avatar.text().length > 0)).toBe(true)
+    await avatars[0]!.trigger('click')
+    expect(wrapper.findAll('[role="tooltip"]')).toHaveLength(1)
+    expect(wrapper.get('[role="tooltip"]').text()).toBe('alice')
+    await avatars[1]!.trigger('click')
+    expect(wrapper.get('[role="tooltip"]').text()).toBe('bob')
+    await avatars[2]!.trigger('click')
+    expect(wrapper.findAll('[role="tooltip"]')).toHaveLength(1)
+    expect(wrapper.get('[role="tooltip"]').text()).toBe('same-name')
+    expect(avatars[3]!.attributes('aria-expanded')).toBe('false')
   })
 
   it('allows creating a key while the active request pool is busy', async () => {
@@ -193,7 +196,8 @@ describe('FreeChannelsView', () => {
     })
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
-    const wrapper = mountView(false)
+    vi.stubGlobal('isSecureContext', true)
+    const wrapper = mountView(false, ' https://api.example.com/v1/ ')
     await flushPromises()
     await wrapper.find('[data-testid="join-free-channel-1"]').trigger('click')
     const dialog = wrapper.find('[data-testid="join-free-channel-dialog"]')
@@ -201,11 +205,67 @@ describe('FreeChannelsView', () => {
     await wrapper.findAll('button').find(button => button.text() === 'Join and create API key')!.trigger('click')
     await flushPromises()
     expect(sharedChannelsAPI.createKey).toHaveBeenCalledWith(1, 'Live service')
-    expect(dialog.find('code').text()).toBe('preview-test-key')
-    await dialog.find('button').trigger('click')
+    expect(dialog.get('[data-testid="shared-key-value"]').text()).toBe('preview-test-key')
+    await dialog.get('[data-testid="copy-shared-key"]').trigger('click')
     await flushPromises()
     expect(writeText).toHaveBeenCalledWith('preview-test-key')
     expect(dialog.text()).toContain('Copied')
+    expect(dialog.get('[data-testid="shared-endpoint-value"]').text()).toBe('https://api.example.com/v1/')
+    expect(dialog.get('[data-testid="copy-shared-endpoint"]').text()).toBe('Copy')
+    await dialog.get('[data-testid="copy-shared-endpoint"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith('https://api.example.com/v1/')
+    expect(dialog.get('[data-testid="copy-shared-endpoint"]').text()).toBe('Copied')
+    expect(dialog.get('[data-testid="copy-shared-key"]').text()).toBe('Copied')
+    expect(wrapper.findAll('button').some(button => button.text() === 'Cancel')).toBe(false)
+  })
+
+  it('displays and copies the configured endpoint before joining without creating a key', async () => {
+    vi.mocked(sharedChannelsAPI.list).mockResolvedValue([publishedChannel()])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    vi.stubGlobal('isSecureContext', true)
+    const wrapper = mountView(false, ' https://api.example.com/custom/v1/ ')
+    await flushPromises()
+    await wrapper.get('[data-testid="join-free-channel-1"]').trigger('click')
+    expect(wrapper.get('[data-testid="shared-endpoint-value"]').text()).toBe('https://api.example.com/custom/v1/')
+    await wrapper.get('[data-testid="copy-shared-endpoint"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('https://api.example.com/custom/v1/')
+    expect(sharedChannelsAPI.createKey).not.toHaveBeenCalled()
+  })
+
+  it.each(['', '   \n '])('hides an empty endpoint instead of using the website origin (%j)', async apiBaseUrl => {
+    const wrapper = mountView(true, apiBaseUrl)
+    await flushPromises()
+    await wrapper.get('[data-testid="join-free-channel-gemini-pool"]').trigger('click')
+    const dialog = wrapper.get('[data-testid="join-free-channel-dialog"]')
+    expect(dialog.find('[data-testid="shared-endpoint-field"]').exists()).toBe(false)
+    expect(dialog.text()).not.toContain(window.location.origin)
+    useAppStore().apiBaseUrl = 'https://api.example.com'
+    await flushPromises()
+    expect(dialog.get('[data-testid="shared-endpoint-value"]').text()).toBe('https://api.example.com')
+    useAppStore().apiBaseUrl = ''
+    await flushPromises()
+    expect(dialog.find('[data-testid="shared-endpoint-field"]').exists()).toBe(false)
+  })
+
+  it('shows a copy failure without claiming success and allows retry', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied')).mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    vi.stubGlobal('isSecureContext', true)
+    const wrapper = mountView(true, 'https://api.example.com')
+    await flushPromises()
+    await wrapper.get('[data-testid="join-free-channel-gemini-pool"]').trigger('click')
+    const field = wrapper.get('[data-testid="shared-endpoint-field"]')
+    await field.get('button').trigger('click')
+    await flushPromises()
+    expect(field.get('[role="alert"]').text()).toBe(en.common.copyFailed)
+    expect(field.get('button').text()).toBe('Copy')
+    await field.get('button').trigger('click')
+    await flushPromises()
+    expect(field.find('[role="alert"]').exists()).toBe(false)
+    expect(field.get('button').text()).toBe('Copied')
   })
 
   it('keeps the dialog open while creating a key so the result is not lost', async () => {
@@ -215,10 +275,15 @@ describe('FreeChannelsView', () => {
     const wrapper = mountView(false)
     await flushPromises()
     await wrapper.find('[data-testid="join-free-channel-1"]').trigger('click')
-    await wrapper.findAll('button').find(button => button.text() === 'Join and create API key')!.trigger('click')
-    const cancel = wrapper.findAll('button').find(button => button.text() === 'Cancel')!
-    expect(cancel.attributes('disabled')).toBeDefined()
-    await cancel.trigger('click')
+    const createButton = wrapper.findAll('button').find(button => button.text() === 'Join and create API key')!
+    await createButton.trigger('click')
+    expect(createButton.attributes('disabled')).toBeDefined()
+    const modal = wrapper.findComponent({ name: 'BaseDialog' })
+    expect(modal.props('showCloseButton')).toBe(false)
+    expect(modal.props('closeOnEscape')).toBe(false)
+    expect(modal.props('closeOnClickOutside')).toBe(false)
+    modal.vm.$emit('close')
+    await flushPromises()
     expect(wrapper.find('[data-testid="join-free-channel-dialog"]').exists()).toBe(true)
     finish({ id: 10, key: 'created-test-key', name: 'Live service', group_id: 2, status: 'active', expires_at: null })
     await flushPromises()

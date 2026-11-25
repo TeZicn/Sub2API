@@ -52,11 +52,13 @@
                 </label>
               </div>
             </fieldset>
-            <label class="space-y-1.5 sm:col-span-2">
-              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.models') }}</span>
-              <textarea v-model="modelsInput" data-testid="shared-models-input" class="input min-h-[88px] resize-y font-mono text-xs" rows="3" maxlength="20100" :placeholder="t('admin.sharedChannels.modelsPlaceholder')" />
-              <span class="block text-[10px] leading-4 text-gray-400 dark:text-dark-400">{{ t('admin.sharedChannels.modelsHint') }}</span>
-            </label>
+            <SharedChannelModelPicker
+              v-model="editing.models"
+              class="sm:col-span-2"
+              :group-id="editing.group_id"
+              :disabled="saving"
+              :preview-models="previewMode ? previewModels : undefined"
+            />
             <label v-if="endMode === 'time'" class="space-y-1.5 sm:col-span-2">
               <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.expiry') }}</span>
               <input v-model="expiryInput" class="input" type="datetime-local" :required="editing.published" />
@@ -170,6 +172,7 @@ import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import SharedChannelModelPicker from '@/components/admin/shared-channels/SharedChannelModelPicker.vue'
 import * as groupsAPI from '@/api/admin/groups'
 import * as sharedChannelAPI from '@/api/admin/sharedChannels'
 import type { AdminGroup } from '@/types'
@@ -184,7 +187,6 @@ const channels = ref<AdminSharedChannel[]>([])
 const groups = ref<SharedGroup[]>([])
 const editing = ref<EditingChannel | null>(null)
 const expiryInput = ref('')
-const modelsInput = ref('')
 const deleting = ref<AdminSharedChannel | null>(null)
 const removing = ref(false)
 const deleteError = ref('')
@@ -197,6 +199,7 @@ const loadError = ref('')
 const eligibleGroups = computed(() => groups.value.filter(group =>
   group.status === 'active' && group.is_exclusive && group.subscription_type === 'standard',
 ))
+const previewModels = computed(() => channels.value.filter(channel => channel.group_id === editing.value?.group_id).flatMap(channel => channel.models))
 
 onMounted(load)
 
@@ -234,7 +237,6 @@ function toLocalInput(value: string | null) {
 function startCreate() {
   error.value = ''
   endMode.value = 'time'
-  modelsInput.value = ''
   editing.value = {
     id: null,
     name: '',
@@ -253,8 +255,7 @@ function startCreate() {
 function startEdit(item: AdminSharedChannel) {
   error.value = ''
   endMode.value = item.budget_limit == null ? 'time' : 'budget'
-  editing.value = { ...item }
-  modelsInput.value = item.models.join('\n')
+  editing.value = { ...item, models: [...item.models] }
   expiryInput.value = toLocalInput(item.expires_at)
 }
 
@@ -272,7 +273,7 @@ async function save() {
   try {
     const input: SharedChannelInput = {
       name: editing.value.name,
-      models: [...new Set(modelsInput.value.split(/[\n,，]+/).map(model => model.trim()).filter(Boolean))],
+      models: [...editing.value.models],
       group_id: Number(editing.value.group_id),
       max_concurrency: Number(editing.value.max_concurrency),
       expires_at: endMode.value === 'time' && expiryInput.value ? new Date(expiryInput.value).toISOString() : null,

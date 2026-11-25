@@ -18,7 +18,6 @@ export interface FreeChannelMock {
   budgetLimit?: number | null
   budgetUsed?: number
   maxConcurrency: number
-  personalConcurrency?: number
   usernames: string[]
   currentUserJoined: boolean
   hourlyStatuses: HourlyRequestStatus[]
@@ -140,19 +139,3 @@ export const freeChannelSamples: FreeChannelMock[] = [
     }),
   },
 ]
-
-export function estimateConcurrencyShare(
-  maxConcurrency: number,
-  currentParticipants: number,
-  personalConcurrency?: number,
-): { min: number; max: number } | null {
-  if (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0) return null
-  if (!Number.isInteger(currentParticipants) || currentParticipants < 0) return null
-
-  const participantsAfterJoin = currentParticipants + 1
-  if (participantsAfterJoin > maxConcurrency) return null
-
-  const average = maxConcurrency / participantsAfterJoin
-  const cap = personalConcurrency != null && personalConcurrency > 0 ? personalConcurrency : maxConcurrency
-  return { min: Math.min(cap, Math.floor(average)), max: Math.min(cap, Math.ceil(average)) }
-}

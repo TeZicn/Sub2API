@@ -20,6 +20,13 @@ func sharedChannelFixture(t *testing.T, budget bool) (service.SharedChannelRepos
 	t.Helper()
 	client := testEntClient(t)
 	u := mustCreateUser(t, client, &service.User{Username: "shared-user", Balance: 100, Concurrency: 5})
+	// 用量写入真实测试库，必须清理自身记录，避免污染随后运行的全局统计测试。
+	t.Cleanup(func() {
+		for _, query := range []string{"DELETE FROM usage_logs WHERE user_id=$1", "DELETE FROM ops_error_logs WHERE user_id=$1"} {
+			_, err := integrationDB.ExecContext(context.Background(), query, u.ID)
+			require.NoError(t, err)
+		}
+	})
 	g := mustCreateGroup(t, client, &service.Group{Name: "shared-" + uuid.NewString(), IsExclusive: true, RateMultiplier: 1})
 	in := service.SharedChannelInput{Name: "Shared service", GroupID: g.ID, MaxConcurrency: 8, Published: true}
 	if budget {
@@ -226,7 +233,15 @@ func TestSharedChannelActivityExpiresWithoutRevokingKeys(t *testing.T) {
 	assertUsers([]string{first.Username, second.Username})
 
 	_, err = integrationDB.ExecContext(ctx, `UPDATE shared_channel_memberships
-		SET last_active_at = statement_timestamp() - interval '5 minutes 1 second' WHERE id = $1`, firstID)
+		SET last_active_at = statement_timestamp() - interval '90 seconds' WHERE id = $1`, firstID)
+	require.NoError(t, err)
+	assertUsers([]string{first.Username, second.Username})
+	member, err = repo.FindMembership(ctx, firstID)
+	require.NoError(t, err)
+	require.Equal(t, 4, member.Share(), "a user active within two minutes keeps their share")
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE shared_channel_memberships
+		SET last_active_at = statement_timestamp() - interval '2 minutes 1 second' WHERE id = $1`, firstID)
 	require.NoError(t, err)
 	assertUsers([]string{second.Username})
 	member, err = repo.FindMembership(ctx, secondID)
@@ -284,7 +299,7 @@ func TestSharedChannelConcurrentActivityAdmission(t *testing.T) {
 	require.NoError(t, a.err)
 	require.ErrorIs(t, b.err, service.ErrSharedChannelFull)
 	_, err = integrationDB.ExecContext(ctx, `UPDATE shared_channel_memberships
-		SET last_active_at = statement_timestamp() - interval '5 minutes 1 second' WHERE id = $1`, a.id)
+		SET last_active_at = statement_timestamp() - interval '2 minutes 1 second' WHERE id = $1`, a.id)
 	require.NoError(t, err)
 	member, err := repo.ActivateMembership(ctx, b.id, b.userID, p.GroupID)
 	require.NoError(t, err)
@@ -416,4 +431,113 @@ func TestSharedChannelCustomModelsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, saved.Models)
 	require.NotNil(t, saved.Models)
+}
+
+func TestSharedChannelStatusCountsOnlyFinalProviderFailures(t *testing.T) {
+	ctx := context.Background()
+	repo, publication, user := sharedChannelFixture(t, false)
+	key, _ := joinSharedChannelKey(t, repo, publication.ID, user.ID)
+	ops := NewOpsRepository(integrationDB)
+	// 固定在前一小时内部，避免跨整点时测试结果发生漂移。
+	var bucket time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT date_trunc('hour', statement_timestamp()) - interval '1 hour'`).Scan(&bucket))
+	for _, sample := range []struct {
+		name, phase, owner string
+		status             int
+		business, counted  bool
+	}{
+		{"upstream 500", "upstream", "provider", 500, false, true},
+		{"upstream 429", "upstream", "provider", 429, false, true},
+		{"upstream auth", "upstream", "provider", 401, false, true},
+		{"account token failure", "account_auth", "provider", 502, false, true},
+		{"transport timeout", "network", "provider", 504, false, true},
+		{"stream interrupted", "upstream", "provider", 502, false, true},
+		{"invalid client request", "request", "client", 400, false, false},
+		{"invalid client key", "auth", "client", 401, true, false},
+		{"local limit", "concurrency", "platform", 429, true, false},
+		{"local quota", "billing", "platform", 403, true, false},
+		{"no available accounts", "routing", "platform", 503, true, false},
+		{"internal error", "internal", "platform", 500, false, false},
+		{"recovered retry", "upstream", "provider", 200, false, false},
+		{"client cancelled", "network", "provider", 499, false, false},
+		{"request policy", "request", "provider", 400, true, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			id, err := ops.InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{
+				RequestID: uuid.NewString(), APIKeyID: &key.ID, UserID: &user.ID,
+				ErrorPhase: sample.phase, ErrorOwner: sample.owner, ErrorType: "api_error",
+				StatusCode: sample.status, IsBusinessLimited: sample.business, CreatedAt: bucket.Add(time.Minute),
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := integrationDB.ExecContext(ctx, "DELETE FROM ops_error_logs WHERE id=$1", id)
+				require.NoError(t, err)
+			})
+			channels, err := repo.ListPublished(ctx, user.ID)
+			require.NoError(t, err)
+			for _, channel := range channels {
+				if channel.ID != publication.ID {
+					continue
+				}
+				require.Len(t, channel.Hours, 24)
+				for _, hour := range channel.Hours {
+					want := 0
+					if hour.StartedAt.Equal(bucket) && sample.counted {
+						want = 1
+					}
+					require.Equal(t, want, hour.Failures)
+					require.Equal(t, want, hour.Requests)
+				}
+				return
+			}
+			t.Fatal("publication missing")
+		})
+	}
+	account := mustCreateAccount(t, testEntClient(t), &service.Account{Name: "shared-status-" + uuid.NewString()})
+	_, err := newUsageLogRepositoryWithSQL(testEntClient(t), integrationDB).Create(ctx, &service.UsageLog{
+		UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, RequestID: uuid.NewString(),
+		Model: "test-model", InputTokens: 1, CreatedAt: bucket.Add(time.Minute),
+	})
+	require.NoError(t, err)
+	channels, err := repo.ListPublished(ctx, user.ID)
+	require.NoError(t, err)
+	found := false
+	for _, channel := range channels {
+		if channel.ID == publication.ID {
+			for _, hour := range channel.Hours {
+				if hour.StartedAt.Equal(bucket) {
+					found = true
+					require.Equal(t, 1, hour.Requests)
+					require.Zero(t, hour.Failures)
+				}
+			}
+		}
+	}
+	require.True(t, found, "successful upstream request must appear in its hour")
+}
+
+func TestSharedChannelParticipantNameUsesEmailPrefixWhenUsernameBlank(t *testing.T) {
+	ctx := context.Background()
+	repo, publication, user := sharedChannelFixture(t, false)
+	_, memberID := joinSharedChannelKey(t, repo, publication.ID, user.ID)
+	_, err := repo.ActivateMembership(ctx, memberID, user.ID, publication.GroupID)
+	require.NoError(t, err)
+	prefix := "alice-" + uuid.NewString()
+	for _, sample := range []struct{ username, want string }{
+		{"Alice", "Alice"}, {"  Alice  ", "Alice"}, {"", prefix}, {"   ", prefix},
+	} {
+		_, err := integrationDB.ExecContext(ctx, `UPDATE users SET username=$1,email=$2 WHERE id=$3`, sample.username, prefix+"@example.com", user.ID)
+		require.NoError(t, err)
+		channels, err := repo.ListPublished(ctx, user.ID)
+		require.NoError(t, err)
+		found := false
+		for _, channel := range channels {
+			if channel.ID == publication.ID {
+				found = true
+				require.Equal(t, []string{sample.want}, channel.Usernames)
+				require.NotContains(t, channel.Usernames[0], "@example.com")
+			}
+		}
+		require.True(t, found)
+	}
 }

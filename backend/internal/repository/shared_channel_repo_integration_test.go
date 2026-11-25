@@ -465,7 +465,7 @@ func TestSharedChannelStatusCountsOnlyFinalProviderFailures(t *testing.T) {
 		t.Run(sample.name, func(t *testing.T) {
 			id, err := ops.InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{
 				RequestID: uuid.NewString(), APIKeyID: &key.ID, UserID: &user.ID,
-				ErrorPhase: sample.phase, ErrorOwner: sample.owner, ErrorType: "api_error",
+				ErrorPhase: sample.phase, ErrorOwner: sample.owner, ErrorType: "api_error", Severity: "P2",
 				StatusCode: sample.status, IsBusinessLimited: sample.business, CreatedAt: bucket.Add(time.Minute),
 			})
 			require.NoError(t, err)

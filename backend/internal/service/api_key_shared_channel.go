@@ -61,13 +61,14 @@ func (s *APIKeyService) authorizeSharedKey(ctx context.Context, key *APIKey) (*A
 	if err != nil {
 		return nil, err
 	}
-	if m == nil || m.Share() <= 0 || key.User == nil || key.Group == nil {
+	if m == nil || key.User == nil || key.Group == nil {
 		return nil, ErrAPIKeyNotFound
 	}
 	// Cache entries describe the underlying user, not the privilege of this key.
 	user := *key.User
 	user.AllowedGroups = append(append([]int64(nil), user.AllowedGroups...), m.GroupID)
-	user.Concurrency = m.Share()
+	// 鉴权只检查使用资格；实际请求取槽时才激活成员并计算当前份额。
+	user.Concurrency = m.PersonalConcurrency
 	key.User = &user
 	key.SharedChannelBudgetMultiplier = m.BudgetMultiplier
 	key.SharedChannelBudgetEnabled = m.BudgetEnabled
@@ -150,7 +151,7 @@ func (s *APIKeyService) resolveSharedChannelConcurrency(ctx context.Context, use
 	if !ok || s.sharedChannels == nil {
 		return nil, ErrAPIKeyNotFound
 	}
-	m, err := s.sharedChannels.FindMembership(ctx, grant.MembershipID)
+	m, err := s.sharedChannels.ActivateMembership(ctx, grant.MembershipID, grant.UserID, grant.GroupID)
 	if err != nil {
 		return nil, err
 	}

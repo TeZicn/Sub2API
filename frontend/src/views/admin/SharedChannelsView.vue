@@ -14,72 +14,94 @@
         </button>
       </header>
 
-      <section v-if="editing" class="rounded-[24px] border border-primary-200/70 bg-white p-5 shadow-sm dark:border-primary-900/50 dark:bg-dark-800 sm:p-7">
-        <div class="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <h2 class="text-base font-bold text-gray-900 dark:text-white">{{ editing.id ? t('admin.sharedChannels.editTitle') : t('admin.sharedChannels.createTitle') }}</h2>
-            <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.sharedChannels.formHint') }}</p>
-          </div>
-          <button class="btn btn-secondary btn-sm" type="button" @click="cancelEdit">{{ t('common.cancel') }}</button>
-        </div>
-
-        <form class="grid gap-4 md:grid-cols-2 xl:grid-cols-4" @submit.prevent="save">
-          <label class="space-y-1.5 xl:col-span-2">
-            <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.name') }}</span>
-            <input v-model.trim="editing.name" class="input" maxlength="100" required :placeholder="t('admin.sharedChannels.namePlaceholder')" />
-          </label>
-          <label class="space-y-1.5 xl:col-span-2">
-            <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.group') }}</span>
-            <select v-model.number="editing.group_id" class="input" required>
-              <option :value="0" disabled>{{ t('admin.sharedChannels.selectGroup') }}</option>
-              <option v-for="group in eligibleGroups" :key="group.id" :value="group.id">{{ group.name }} · {{ group.platform }}</option>
-              <option v-if="editing.group_id && !eligibleGroups.some(group => group.id === editing?.group_id)" :value="editing.group_id" disabled>{{ editing.group_name }} · {{ t('admin.sharedChannels.groupUnavailable') }}</option>
-            </select>
-            <span class="block text-[10px] leading-4 text-gray-400 dark:text-dark-400">{{ t('admin.sharedChannels.groupHint') }}</span>
-          </label>
-          <label class="space-y-1.5">
-            <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.limit') }}</span>
-            <input v-model.number="editing.max_concurrency" class="input" type="number" min="1" max="1000" required />
-          </label>
-          <fieldset class="space-y-1.5 md:col-span-2 xl:col-span-3">
-            <legend class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.endMode') }}</legend>
-            <div class="flex max-w-md gap-1 rounded-xl bg-gray-100 p-1 dark:bg-dark-900">
-              <label v-for="mode in ['time', 'budget'] as const" :key="mode" class="relative flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary-500" :class="endMode === mode ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-700 dark:text-primary-300' : 'text-gray-500 dark:text-dark-400'">
-                <input v-model="endMode" type="radio" name="shared-service-end-mode" :value="mode" class="sr-only" />
-                {{ t(mode === 'time' ? 'admin.sharedChannels.timeMode' : 'admin.sharedChannels.budgetMode') }}
-              </label>
-            </div>
+      <BaseDialog
+        :show="editing !== null"
+        :title="editing?.id ? t('admin.sharedChannels.editTitle') : t('admin.sharedChannels.createTitle')"
+        width="normal"
+        :close-on-escape="!saving"
+        :show-close-button="!saving"
+        @close="cancelEdit"
+      >
+        <form v-if="editing" id="shared-channel-form" @submit.prevent="save">
+          <p class="mb-5 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ t('admin.sharedChannels.formHint') }}</p>
+          <p v-if="error" role="alert" class="mb-4 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">{{ error }}</p>
+          <fieldset :disabled="saving" class="grid gap-5 sm:grid-cols-2">
+            <label class="space-y-1.5 sm:col-span-2">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.name') }}</span>
+              <input v-model.trim="editing.name" class="input" maxlength="100" required :placeholder="t('admin.sharedChannels.namePlaceholder')" />
+            </label>
+            <label class="space-y-1.5 sm:col-span-2">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.group') }}</span>
+              <select v-model.number="editing.group_id" class="input" required>
+                <option :value="0" disabled>{{ t('admin.sharedChannels.selectGroup') }}</option>
+                <option v-for="group in eligibleGroups" :key="group.id" :value="group.id">{{ group.name }} · {{ group.platform }}</option>
+                <option v-if="editing.group_id && !eligibleGroups.some(group => group.id === editing?.group_id)" :value="editing.group_id" disabled>{{ editing.group_name }} · {{ t('admin.sharedChannels.groupUnavailable') }}</option>
+              </select>
+              <span class="block text-[10px] leading-4 text-gray-400 dark:text-dark-400">{{ t('admin.sharedChannels.groupHint') }}</span>
+            </label>
+            <label class="space-y-1.5">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.limit') }}</span>
+              <input v-model.number="editing.max_concurrency" class="input" type="number" min="1" max="1000" required />
+            </label>
+            <fieldset class="space-y-1.5">
+              <legend class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.endMode') }}</legend>
+              <div class="flex max-w-md gap-1 rounded-xl bg-gray-100 p-1 dark:bg-dark-900">
+                <label v-for="mode in ['time', 'budget'] as const" :key="mode" class="relative flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary-500" :class="endMode === mode ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-700 dark:text-primary-300' : 'text-gray-500 dark:text-dark-400'">
+                  <input v-model="endMode" type="radio" name="shared-service-end-mode" :value="mode" class="sr-only" />
+                  {{ t(mode === 'time' ? 'admin.sharedChannels.timeMode' : 'admin.sharedChannels.budgetMode') }}
+                </label>
+              </div>
+            </fieldset>
+            <label class="space-y-1.5 sm:col-span-2">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.models') }}</span>
+              <textarea v-model="modelsInput" data-testid="shared-models-input" class="input min-h-[88px] resize-y font-mono text-xs" rows="3" maxlength="20100" :placeholder="t('admin.sharedChannels.modelsPlaceholder')" />
+              <span class="block text-[10px] leading-4 text-gray-400 dark:text-dark-400">{{ t('admin.sharedChannels.modelsHint') }}</span>
+            </label>
+            <label v-if="endMode === 'time'" class="space-y-1.5 sm:col-span-2">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.expiry') }}</span>
+              <input v-model="expiryInput" class="input" type="datetime-local" :required="editing.published" />
+            </label>
+            <label v-if="endMode === 'budget'" class="space-y-1.5">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.budgetLimit') }}</span>
+              <input v-model.number="editing.budget_limit" class="input" type="number" min="0.00000001" max="1000000000" step="any" placeholder="100" required />
+              <span class="block text-[10px] leading-4 text-gray-400 dark:text-dark-400">{{ t('admin.sharedChannels.budgetHint') }}</span>
+            </label>
+            <label v-if="endMode === 'budget'" class="space-y-1.5">
+              <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.budgetMultiplier') }}</span>
+              <input v-model.number="editing.budget_multiplier" class="input" type="number" min="0.000001" max="1000" step="any" required />
+            </label>
+            <label class="flex items-center gap-3 rounded-2xl border border-gray-200/80 bg-gray-50 px-4 py-3 dark:border-dark-700 dark:bg-dark-900/40 sm:col-span-2">
+              <input v-model="editing.published" type="checkbox" class="h-4 w-4 rounded accent-primary-600" />
+              <span>
+                <span class="block text-xs font-semibold text-gray-800 dark:text-dark-100">{{ t('admin.sharedChannels.publishNow') }}</span>
+                <span class="mt-0.5 block text-[10px] text-gray-500 dark:text-dark-400">{{ t('admin.sharedChannels.publishHint') }}</span>
+              </span>
+            </label>
           </fieldset>
-          <label v-if="endMode === 'time'" class="space-y-1.5 md:col-span-2">
-            <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.expiry') }}</span>
-            <input v-model="expiryInput" class="input" type="datetime-local" :required="editing.published" />
-          </label>
-          <label v-if="endMode === 'budget'" class="space-y-1.5">
-            <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.budgetLimit') }}</span>
-            <input v-model.number="editing.budget_limit" class="input" type="number" min="0.00000001" max="1000000000" step="any" placeholder="100" required />
-            <span class="block text-[10px] leading-4 text-gray-400 dark:text-dark-400">{{ t('admin.sharedChannels.budgetHint') }}</span>
-          </label>
-          <label v-if="endMode === 'budget'" class="space-y-1.5">
-            <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('admin.sharedChannels.budgetMultiplier') }}</span>
-            <input v-model.number="editing.budget_multiplier" class="input" type="number" min="0.000001" max="1000" step="any" required />
-          </label>
-          <label class="flex items-center gap-3 rounded-2xl border border-gray-200/80 bg-gray-50 px-4 py-3 dark:border-dark-700 dark:bg-dark-900/40 md:col-span-2">
-            <input v-model="editing.published" type="checkbox" class="h-4 w-4 rounded accent-primary-600" />
-            <span>
-              <span class="block text-xs font-semibold text-gray-800 dark:text-dark-100">{{ t('admin.sharedChannels.publishNow') }}</span>
-              <span class="mt-0.5 block text-[10px] text-gray-500 dark:text-dark-400">{{ t('admin.sharedChannels.publishHint') }}</span>
-            </span>
-          </label>
-          <div class="flex items-center justify-end gap-2 md:col-span-2 xl:col-span-4">
-            <p v-if="error" role="alert" class="mr-auto text-xs text-rose-600 dark:text-rose-300">{{ error }}</p>
-            <button class="btn btn-secondary" type="button" :disabled="saving" @click="cancelEdit">{{ t('common.cancel') }}</button>
-            <button class="btn btn-primary" type="submit" :disabled="saving">
-              <Icon v-if="saving" name="refresh" size="sm" class="animate-spin" />
-              {{ saving ? t('common.saving') : t(previewMode ? 'admin.sharedChannels.savePreview' : 'admin.sharedChannels.save') }}
-            </button>
-          </div>
         </form>
-      </section>
+        <template #footer>
+          <button class="btn btn-secondary" type="button" :disabled="saving" @click="cancelEdit">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" type="submit" form="shared-channel-form" :disabled="saving">
+            <Icon v-if="saving" name="refresh" size="sm" class="animate-spin" />
+            {{ saving ? t('common.saving') : t(previewMode ? 'admin.sharedChannels.savePreview' : 'admin.sharedChannels.save') }}
+          </button>
+        </template>
+      </BaseDialog>
+
+      <BaseDialog :show="deleting !== null" :title="t('admin.sharedChannels.deleteTitle')" width="narrow" :close-on-escape="!removing" :show-close-button="!removing" @close="cancelDelete">
+        <div v-if="deleting" class="space-y-3">
+          <p class="text-sm leading-6 text-gray-600 dark:text-dark-200">{{ t('admin.sharedChannels.deleteConfirm', { name: deleting.name }) }}</p>
+          <p class="rounded-xl bg-gray-50 px-3 py-2.5 text-xs leading-5 text-gray-500 dark:bg-dark-900 dark:text-dark-300">{{ t('admin.sharedChannels.deleteHistoryHint') }}</p>
+          <p v-if="deleteError" role="alert" class="text-xs text-rose-600 dark:text-rose-300">{{ deleteError }}</p>
+        </div>
+        <template #footer>
+          <button class="btn btn-secondary" type="button" :disabled="removing" @click="cancelDelete">{{ t('common.cancel') }}</button>
+          <button data-testid="confirm-delete-shared" class="btn btn-danger" type="button" :disabled="removing" @click="deleteChannel">
+            <Icon v-if="removing" name="refresh" size="sm" class="animate-spin" />
+            {{ t('common.delete') }}
+          </button>
+        </template>
+      </BaseDialog>
 
       <section class="space-y-3">
         <div class="flex items-center justify-between">
@@ -132,6 +154,7 @@
               <div class="flex items-center gap-2">
                 <button class="btn btn-secondary btn-sm" type="button" @click="startEdit(item)">{{ t('common.edit') }}</button>
                 <button v-if="item.published" class="btn btn-danger btn-sm" type="button" @click="unpublish(item)">{{ t('admin.sharedChannels.unpublish') }}</button>
+                <button data-testid="delete-shared-channel" class="btn btn-secondary btn-sm text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950/30" type="button" @click="startDelete(item)">{{ t('common.delete') }}</button>
               </div>
             </div>
           </article>
@@ -145,6 +168,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import * as groupsAPI from '@/api/admin/groups'
 import * as sharedChannelAPI from '@/api/admin/sharedChannels'
@@ -160,6 +184,11 @@ const channels = ref<AdminSharedChannel[]>([])
 const groups = ref<SharedGroup[]>([])
 const editing = ref<EditingChannel | null>(null)
 const expiryInput = ref('')
+const modelsInput = ref('')
+const deleting = ref<AdminSharedChannel | null>(null)
+const removing = ref(false)
+const deleteError = ref('')
+let previewInitialized = false
 const endMode = ref<'time' | 'budget'>('time')
 const loading = ref(false)
 const saving = ref(false)
@@ -169,20 +198,18 @@ const eligibleGroups = computed(() => groups.value.filter(group =>
   group.status === 'active' && group.is_exclusive && group.subscription_type === 'standard',
 ))
 
-onMounted(async () => {
-  await load()
-  if (previewMode && channels.value[0]) startEdit(channels.value[0])
-})
+onMounted(load)
 
 async function load() {
   loading.value = true
   loadError.value = ''
   try {
     if (previewMode) {
-      if (!channels.value.length) {
+      if (!previewInitialized) {
         const samples = await import('./sharedChannelsPreview')
         channels.value = samples.channels.map(channel => ({ ...channel }))
         groups.value = samples.groups.map(group => ({ ...group }))
+        previewInitialized = true
       }
       return
     }
@@ -207,9 +234,11 @@ function toLocalInput(value: string | null) {
 function startCreate() {
   error.value = ''
   endMode.value = 'time'
+  modelsInput.value = ''
   editing.value = {
     id: null,
     name: '',
+    models: [],
     group_id: 0,
     max_concurrency: 5,
     expires_at: null,
@@ -225,22 +254,25 @@ function startEdit(item: AdminSharedChannel) {
   error.value = ''
   endMode.value = item.budget_limit == null ? 'time' : 'budget'
   editing.value = { ...item }
+  modelsInput.value = item.models.join('\n')
   expiryInput.value = toLocalInput(item.expires_at)
 }
 
 function cancelEdit() {
+  if (saving.value) return
   editing.value = null
   expiryInput.value = ''
   error.value = ''
 }
 
 async function save() {
-  if (!editing.value) return
+  if (!editing.value || saving.value) return
   saving.value = true
   error.value = ''
   try {
     const input: SharedChannelInput = {
       name: editing.value.name,
+      models: [...new Set(modelsInput.value.split(/[\n,，]+/).map(model => model.trim()).filter(Boolean))],
       group_id: Number(editing.value.group_id),
       max_concurrency: Number(editing.value.max_concurrency),
       expires_at: endMode.value === 'time' && expiryInput.value ? new Date(expiryInput.value).toISOString() : null,
@@ -249,7 +281,8 @@ async function save() {
       budget_multiplier: Number(editing.value.budget_multiplier),
     }
     await persist(editing.value.id, input)
-    cancelEdit()
+    editing.value = null
+    expiryInput.value = ''
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : t('admin.sharedChannels.saveFailed')
@@ -279,6 +312,7 @@ async function unpublish(item: AdminSharedChannel) {
   try {
     await persist(item.id, {
       name: item.name,
+      models: item.models,
       group_id: item.group_id,
       max_concurrency: item.max_concurrency,
       expires_at: item.expires_at,
@@ -289,6 +323,33 @@ async function unpublish(item: AdminSharedChannel) {
     await load()
   } catch (cause) {
     loadError.value = cause instanceof Error ? cause.message : t('admin.sharedChannels.saveFailed')
+  }
+}
+
+function startDelete(item: AdminSharedChannel) {
+  deleteError.value = ''
+  deleting.value = item
+}
+
+function cancelDelete() {
+  if (removing.value) return
+  deleting.value = null
+  deleteError.value = ''
+}
+
+async function deleteChannel() {
+  if (!deleting.value || removing.value) return
+  const id = deleting.value.id
+  removing.value = true
+  deleteError.value = ''
+  try {
+    if (!previewMode) await sharedChannelAPI.remove(id)
+    channels.value = channels.value.filter(channel => channel.id !== id)
+    deleting.value = null
+  } catch (cause) {
+    deleteError.value = cause instanceof Error ? cause.message : t('admin.sharedChannels.deleteFailed')
+  } finally {
+    removing.value = false
   }
 }
 

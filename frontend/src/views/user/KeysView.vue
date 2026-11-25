@@ -159,8 +159,9 @@
               <button
                 :ref="(el) => setGroupButtonRef(row.id, el)"
                 @click="openGroupSelector(row)"
+                :disabled="row.is_shared_channel"
                 class="-mx-2 -my-1 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 transition-all duration-200 hover:bg-gray-100 dark:hover:bg-dark-700"
-                :title="t('keys.clickToChangeGroup')"
+                :title="t(row.is_shared_channel ? 'keys.sharedGroupFixed' : 'keys.clickToChangeGroup')"
               >
                 <GroupBadge
                   v-if="row.group"
@@ -177,8 +178,9 @@
                 <span v-else class="text-sm text-gray-400 dark:text-dark-500">{{
                   t('keys.noGroup')
                 }}</span>
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('keys.selectGroup') }}</span>
+                <span v-if="!row.is_shared_channel" class="text-xs text-gray-500 dark:text-gray-400">{{ t('keys.selectGroup') }}</span>
                 <svg
+                  v-if="!row.is_shared_channel"
                   class="h-3.5 w-3.5 text-gray-400 opacity-60 transition-opacity group-hover/dropdown:opacity-100"
                   fill="none"
                   stroke="currentColor"
@@ -544,7 +546,12 @@
 
         <div>
           <label class="input-label" for="key-form-group">{{ t('keys.groupLabel') }}</label>
+          <div v-if="showEditModal && selectedKey?.is_shared_channel" id="key-form-group" data-testid="shared-key-fixed-group" class="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-700 dark:bg-dark-800">
+            <p class="text-sm font-medium text-gray-800 dark:text-dark-100">{{ selectedKey.group?.name ?? t('freeChannels.title') }}</p>
+            <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('keys.sharedGroupFixed') }}</p>
+          </div>
           <Select
+            v-else
             :key="showEditModal ? 'edit' : createProvider"
             id="key-form-group"
             :aria-label="t('keys.groupLabel')"
@@ -1752,6 +1759,7 @@ const toggleKeyStatus = async (key: ApiKey) => {
 }
 
 const openGroupSelector = (key: ApiKey) => {
+  if (key.is_shared_channel) return
   if (groupSelectorKeyId.value === key.id) {
     groupSelectorKeyId.value = null
     dropdownPosition.value = null
@@ -1875,7 +1883,7 @@ const handleSubmit = async () => {
     if (showEditModal.value && selectedKey.value) {
       const updates: UpdateApiKeyRequest = {
         name: formData.value.name,
-        group_id: formData.value.group_id,
+        ...(selectedKey.value.is_shared_channel ? {} : { group_id: formData.value.group_id }),
         ip_whitelist: ipWhitelist,
         ip_blacklist: ipBlacklist,
         quota: quota,

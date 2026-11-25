@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -21,6 +22,7 @@ var (
 
 type SharedChannelInput struct {
 	Name             string     `json:"name"`
+	Models           []string   `json:"models"`
 	GroupID          int64      `json:"group_id"`
 	MaxConcurrency   int        `json:"max_concurrency"`
 	ExpiresAt        *time.Time `json:"expires_at"`
@@ -89,8 +91,10 @@ type SharedChannelRepository interface {
 	List(context.Context) ([]SharedChannel, error)
 	ListPublished(context.Context, int64) ([]PublishedSharedChannel, error)
 	Save(context.Context, int64, SharedChannelInput) (*SharedChannel, error)
+	Delete(context.Context, int64) error
 	WithMembership(context.Context, int64, int64, func(context.Context, SharedChannelMembership) error) error
 	FindMembership(context.Context, int64) (*SharedChannelMembership, error)
+	ActivateMembership(context.Context, int64, int64, int64) (*SharedChannelMembership, error)
 	ListMemberships(context.Context, int64) ([]SharedChannelMembership, error)
 }
 
@@ -111,8 +115,17 @@ func (s *SharedChannelService) ListPublished(ctx context.Context, userID int64) 
 	return s.repo.ListPublished(ctx, userID)
 }
 
+func (s *SharedChannelService) Delete(ctx context.Context, id int64) error {
+	return s.repo.Delete(ctx, id)
+}
+
 func (s *SharedChannelService) Save(ctx context.Context, id int64, input SharedChannelInput) (*SharedChannel, error) {
 	input.Name = strings.TrimSpace(input.Name)
+	models, err := normalizeSharedChannelModels(input.Models)
+	if err != nil {
+		return nil, err
+	}
+	input.Models = models
 	if input.BudgetMultiplier == nil {
 		defaultMultiplier := 1.0
 		input.BudgetMultiplier = &defaultMultiplier
@@ -136,6 +149,30 @@ func (s *SharedChannelService) Save(ctx context.Context, id int64, input SharedC
 		return nil, infraerrors.BadRequest("SHARED_CHANNEL_EXPIRY_INVALID", "The expiry must be in the future")
 	}
 	return s.repo.Save(ctx, id, input)
+}
+
+// 展示名称独立于分组的模型权限，仅做边界校验和有序去重。
+func normalizeSharedChannelModels(input []string) ([]string, error) {
+	invalid := infraerrors.BadRequest("SHARED_CHANNEL_MODELS_INVALID", "Use at most 100 model names, each 1 to 200 characters without control characters")
+	if len(input) > 100 {
+		return nil, invalid
+	}
+	models := make([]string, 0, len(input))
+	seen := make(map[string]bool, len(input))
+	for _, value := range input {
+		model := strings.TrimSpace(value)
+		if model == "" {
+			continue
+		}
+		if utf8.RuneCountInString(model) > 200 || strings.ContainsFunc(model, unicode.IsControl) {
+			return nil, invalid
+		}
+		if !seen[model] {
+			models = append(models, model)
+			seen[model] = true
+		}
+	}
+	return models, nil
 }
 
 func sharedChannelValueInRange(value, min, max float64) bool {

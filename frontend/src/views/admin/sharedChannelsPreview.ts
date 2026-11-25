@@ -8,13 +8,13 @@ export const groups: Pick<AdminGroup, 'id' | 'name' | 'platform' | 'status' | 'i
 ]
 
 export const channels: AdminSharedChannel[] = [
-  { id: 1, name: 'Gemini Flash 共享服务', group_id: 1, group_name: groups[0]!.name, platform: 'gemini',
+  { id: 1, name: 'Gemini Flash 共享服务', models: ['gemini-2.5-flash', 'gemini-2.5-pro'], group_id: 1, group_name: groups[0]!.name, platform: 'gemini',
     group_eligible: true, max_concurrency: 8, expires_at: null, published: true,
     budget_limit: 100, budget_multiplier: 2, budget_used: 24.68, budget_pricing_blocked: false },
-  { id: 2, name: 'Claude 共享服务', group_id: 2, group_name: groups[1]!.name, platform: 'anthropic',
+  { id: 2, name: 'Claude 共享服务', models: ['claude-sonnet-4-5'], group_id: 2, group_name: groups[1]!.name, platform: 'anthropic',
     group_eligible: true, max_concurrency: 5, expires_at: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), published: true,
     budget_limit: null, budget_multiplier: 1, budget_used: 0, budget_pricing_blocked: false },
-  { id: 3, name: 'OpenAI 共享服务', group_id: 3, group_name: groups[2]!.name, platform: 'openai',
+  { id: 3, name: 'OpenAI 共享服务', models: ['gpt-5'], group_id: 3, group_name: groups[2]!.name, platform: 'openai',
     group_eligible: true, max_concurrency: 8, expires_at: null, published: false,
     budget_limit: 100, budget_multiplier: 1, budget_used: 100, budget_pricing_blocked: false },
 ]

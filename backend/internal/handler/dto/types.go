@@ -72,6 +72,8 @@ type APIKey struct {
 	// CurrentConcurrency is the real-time active request count for this API key.
 	CurrentConcurrency int `json:"current_concurrency"`
 
+	IsSharedChannel bool `json:"is_shared_channel"`
+
 	// Rate limit fields
 	RateLimit5h   float64    `json:"rate_limit_5h"`
 	RateLimit1d   float64    `json:"rate_limit_1d"`

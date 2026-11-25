@@ -82,6 +82,7 @@ func APIKeyFromService(k *service.APIKey) *APIKey {
 		return nil
 	}
 	out := &APIKey{
+		IsSharedChannel:    k.IsSharedChannel(),
 		ID:                 k.ID,
 		UserID:             k.UserID,
 		Key:                k.Key,

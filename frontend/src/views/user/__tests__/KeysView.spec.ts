@@ -300,6 +300,22 @@ describe('user KeysView column settings', () => {
     isCurrentStep.mockReturnValue(false)
   })
 
+  it('keeps the shared group read-only while allowing a key rename', async () => {
+    const key: ApiKey = { ...createApiKey(), group_id: 42, is_shared_channel: true }
+    listKeys.mockResolvedValueOnce({ items: [key], total: 1, page: 1, page_size: 20, pages: 1 })
+    updateKey.mockResolvedValue({ ...key, name: 'Renamed shared key' })
+    const wrapper = await mountView()
+    await getButtonByText(wrapper, 'common.edit').trigger('click')
+    expect(wrapper.find('[data-testid="shared-key-fixed-group"]').exists()).toBe(true)
+    expect(wrapper.find('[data-tour="key-form-group"]').exists()).toBe(false)
+    await wrapper.get('[data-tour="key-form-name"]').setValue('Renamed shared key')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(updateKey).toHaveBeenCalledWith(key.id, expect.objectContaining({ name: 'Renamed shared key' }))
+    expect(updateKey.mock.calls[0]![1]).not.toHaveProperty('group_id')
+    wrapper.unmount()
+  })
+
   it.each([
     { initialStatus: 'quota_exhausted', status: 'active', formStatus: 'active' },
     { initialStatus: 'inactive', status: 'inactive', formStatus: 'inactive' },

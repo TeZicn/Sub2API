@@ -76,7 +76,35 @@ describe('FreeChannelsView', () => {
 
     expect(wrapper.find('[data-testid="join-free-channel-dialog"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('design preview')
-    expect(wrapper.text()).toContain('2–3')
+    const dialog = wrapper.find('[data-testid="join-free-channel-dialog"]')
+    expect(dialog.text()).not.toContain('Estimated share after joining')
+    expect(dialog.text()).not.toContain('All keys created by one account')
+    expect(dialog.find('input').exists()).toBe(true)
+  })
+
+  it('reveals a user name only when their avatar is clicked', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const card = wrapper.find('[data-testid="free-channel-card"]')
+    expect(card.text()).not.toContain('cloud_walker')
+    const avatar = card.find('[data-testid="shared-user-avatar"]')
+    await avatar.trigger('click')
+    expect(card.find('[role="tooltip"]').text()).toBe('cloud_walker')
+    expect(avatar.attributes('aria-expanded')).toBe('true')
+    await avatar.trigger('click')
+    expect(card.find('[role="tooltip"]').exists()).toBe(false)
+  })
+
+  it('allows creating a key while the active request pool is busy', async () => {
+    vi.mocked(sharedChannelsAPI.list).mockResolvedValue([publishedChannel({
+      max_concurrency: 1, usernames: ['active-user'], share: 0,
+    })])
+    const wrapper = mountView(false)
+    await flushPromises()
+    const join = wrapper.find('[data-testid="join-free-channel-1"]')
+    expect(join.attributes('disabled')).toBeUndefined()
+    await join.trigger('click')
+    expect(wrapper.find('[data-testid="join-free-channel-dialog"]').exists()).toBe(true)
   })
 
   it('shows open models and expands the remaining model names', async () => {
@@ -144,7 +172,7 @@ describe('FreeChannelsView', () => {
     expect(wrapper.find('[data-testid="join-free-channel-dialog"]').exists()).toBe(false)
   })
 
-  it('removes exhausted budgets on refresh and displays the server-capped share in the dialog', async () => {
+  it('removes exhausted budgets and their pending join dialog on refresh', async () => {
     vi.useFakeTimers()
     vi.mocked(sharedChannelsAPI.list)
       .mockResolvedValueOnce([publishedChannel()])
@@ -152,7 +180,7 @@ describe('FreeChannelsView', () => {
     const wrapper = mountView(false)
     await flushPromises()
     await wrapper.find('[data-testid="join-free-channel-1"]').trigger('click')
-    expect(wrapper.find('[data-testid="join-free-channel-dialog"]').text()).toContain('5 requests')
+    expect(wrapper.find('[data-testid="join-free-channel-dialog"]').exists()).toBe(true)
     await vi.advanceTimersByTimeAsync(15_000)
     expect(wrapper.findAll('[data-testid="free-channel-card"]')).toHaveLength(0)
     expect(wrapper.find('[data-testid="join-free-channel-dialog"]').exists()).toBe(false)

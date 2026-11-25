@@ -116,6 +116,7 @@ export default {
     nameLabel: 'Name',
     namePlaceholder: 'My API Key',
     groupLabel: 'Group',
+    sharedGroupFixed: 'Linked by the shared service; the group cannot be changed',
     providerLabel: 'Provider',
     providers: {
       anthropic: 'Anthropic',
@@ -581,7 +582,7 @@ export default {
       all: 'All',
       open: 'Open',
       joined: 'Joined',
-      full: 'Full'
+      full: 'Busy'
     },
     summary: {
       openPools: 'Open channels',
@@ -598,7 +599,7 @@ export default {
     availability: {
       open: 'Open to join',
       joined: 'Joined',
-      full: 'No spots left'
+      full: 'Busy'
     },
     publishedRemaining: 'LISTING EXPIRES IN',
     longTerm: 'No expiry',
@@ -623,11 +624,12 @@ export default {
     slots: 'requests',
     peopleUsing: 'using',
     shareMeterLabel: 'After joining, each user can send {min} to {max} simultaneous requests out of {total}',
-    capacityFull: 'No spots left',
-    participants: 'USERS IN THIS POOL',
+    capacityFull: 'Busy',
+    participants: 'ACTIVE USERS',
     peopleCount: '{count} people',
     morePeople: '+{count} more',
-    noParticipants: 'No one has joined yet',
+    noParticipants: 'No active users',
+    viewUser: 'View user {name}',
     joinAndCreateKey: 'Join & create a key',
     alreadyJoined: 'Joined',
     createAnotherKey: 'Create another key',
@@ -643,11 +645,6 @@ export default {
       title: 'Join a shared service',
       previewNotice: 'This is a design preview. Joining only updates local display data.',
       doneAction: 'Done',
-      poolSummary: '{count} users will share this pool after you join',
-      yourShare: 'Estimated share after joining',
-      shareBreakdown: 'Estimated simultaneous request limit',
-      shareHint: 'All keys created by one account share the same request limit.',
-      keyHint: 'You can create more keys from API Keys; all your keys share this request limit.',
       keyName: 'API key name',
       keyNamePlaceholder: 'For example: My shared service key',
       keyCreated: 'API key created',

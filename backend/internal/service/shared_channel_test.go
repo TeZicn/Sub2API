@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,11 +56,28 @@ func TestSharedChannelPersonalCapAndEvenShares(t *testing.T) {
 
 type sharedChannelMembershipStub struct {
 	SharedChannelRepository
-	membership *SharedChannelMembership
+	membership  *SharedChannelMembership
+	activateErr error
 }
 
 func (r *sharedChannelMembershipStub) FindMembership(context.Context, int64) (*SharedChannelMembership, error) {
 	return r.membership, nil
+}
+
+func (r *sharedChannelMembershipStub) ActivateMembership(context.Context, int64, int64, int64) (*SharedChannelMembership, error) {
+	return r.membership, r.activateErr
+}
+
+func TestSharedChannelIdleKeyRemainsAuthorized(t *testing.T) {
+	m := &SharedChannelMembership{ID: 1, GroupID: 2, UserID: 3, PersonalConcurrency: 5, MaxConcurrency: 8}
+	svc := &APIKeyService{sharedChannels: &sharedChannelMembershipStub{membership: m}}
+	key, err := svc.authorizeSharedKey(context.Background(), &APIKey{
+		UserID: m.UserID, GroupID: &m.GroupID, SharedChannelMembershipID: &m.ID,
+		User: &User{Concurrency: 5}, Group: &Group{ID: m.GroupID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5, key.User.Concurrency)
+	require.Contains(t, key.User.AllowedGroups, m.GroupID)
 }
 
 type sharedChannelSlotCache struct {
@@ -139,6 +157,12 @@ func TestSharedChannelSlotsRespectPersonalPoolAndLiveMemberLimits(t *testing.T) 
 	require.Equal(t, 4, cache.active[m.UserID])
 	require.Equal(t, 4, cache.active[-2*m.ID])
 	cache.failID = 0
+	repo.activateErr = ErrSharedChannelFull
+	result, err := svc.AcquireUserSlot(ctx, m.UserID, 8)
+	require.NoError(t, err, "a full active pool uses the existing wait/rate-limit path")
+	require.False(t, result.Acquired)
+	require.Equal(t, 4, cache.active[m.UserID])
+	repo.activateErr = nil
 
 	repo.membership = nil
 	_, err = svc.AcquireUserSlot(ctx, m.UserID, 8)
@@ -153,4 +177,34 @@ func TestSharedChannelRejectsOverlappingEndModes(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "either time-based or budget-based")
+}
+
+type sharedChannelSaveStub struct {
+	SharedChannelRepository
+	input SharedChannelInput
+}
+
+func (r *sharedChannelSaveStub) Save(_ context.Context, _ int64, input SharedChannelInput) (*SharedChannel, error) {
+	r.input = input
+	return &SharedChannel{SharedChannelInput: input}, nil
+}
+
+func TestSharedChannelCustomModelsValidation(t *testing.T) {
+	repo := &sharedChannelSaveStub{}
+	svc := NewSharedChannelService(repo, nil)
+	input := SharedChannelInput{Name: "Service", GroupID: 1, MaxConcurrency: 5,
+		Models: []string{" model-a ", "", "model-a", "Display name"}}
+	_, err := svc.Save(context.Background(), 0, input)
+	require.NoError(t, err)
+	require.Equal(t, []string{"model-a", "Display name"}, repo.input.Models)
+	for _, models := range [][]string{{strings.Repeat("a", 201)}, {"bad\x00model"}, make([]string, 101)} {
+		input.Models = models
+		_, err := svc.Save(context.Background(), 0, input)
+		require.Error(t, err)
+	}
+	input.Models = nil
+	_, err = svc.Save(context.Background(), 0, input)
+	require.NoError(t, err)
+	require.NotNil(t, repo.input.Models)
+	require.Empty(t, repo.input.Models)
 }

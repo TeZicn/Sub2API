@@ -747,6 +747,7 @@ export interface CompositeRouteDecision {
 }
 
 export interface ApiKey {
+  is_shared_channel?: boolean
   id: number
   user_id: number
   key: string

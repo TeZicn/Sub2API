@@ -381,6 +381,9 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int) (*AcquireResult, error) {
 	if resolver, ok := ctx.Value(sharedConcurrencyResolverKey{}).(sharedConcurrencyResolver); ok {
 		membership, err := resolver(ctx, userID)
+		if errors.Is(err, ErrSharedChannelFull) {
+			return &AcquireResult{Acquired: false}, nil
+		}
 		if err != nil {
 			return nil, err
 		}

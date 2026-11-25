@@ -34,6 +34,7 @@ func RegisterAdminRoutes(
 		admin.GET("/shared-channels", h.SharedChannel.AdminList)
 		admin.POST("/shared-channels", h.SharedChannel.AdminCreate)
 		admin.PUT("/shared-channels/:id", h.SharedChannel.AdminUpdate)
+		admin.DELETE("/shared-channels/:id", h.SharedChannel.AdminDelete)
 	}
 	// 受限密钥的账户操作走独立资源校验，普通管理员保持原处理器。
 	admin.Use(h.Admin.Account.ScopedAdminKeyAccounts)

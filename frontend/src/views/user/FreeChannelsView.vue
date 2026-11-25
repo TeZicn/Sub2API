@@ -37,7 +37,7 @@
         </div>
       </section>
 
-      <JoinFreeChannelDialog v-if="selectedChannel" :show="showJoinDialog" :channel="selectedChannel" :share-estimate="selectedShare" :loading="creatingKey" :error="createError" :created-key="createdKey" :preview="previewMode" @close="closeJoinDialog" @confirm-preview="handleJoin" />
+      <JoinFreeChannelDialog v-if="selectedChannel" :show="showJoinDialog" :channel="selectedChannel" :loading="creatingKey" :error="createError" :created-key="createdKey" :preview="previewMode" @close="closeJoinDialog" @confirm-preview="handleJoin" />
     </div>
   </AppLayout>
 </template>
@@ -52,7 +52,6 @@ import FreeChannelCard from '@/components/user/free-channels/FreeChannelCard.vue
 import JoinFreeChannelDialog from '@/components/user/free-channels/JoinFreeChannelDialog.vue'
 import * as sharedChannelsAPI from '@/api/sharedChannels'
 import type { SharedChannel } from '@/api/sharedChannels'
-import { estimateConcurrencyShare } from '@/components/user/free-channels/freeChannelsMock'
 
 type FilterValue = 'all' | 'open' | 'joined' | 'full'
 type CardChannel = import('@/components/user/free-channels/freeChannelsMock').FreeChannelMock & { apiID?: number; currentShare?: number; budgetLimit?: number | null; budgetUsed?: number }
@@ -90,9 +89,6 @@ const filteredChannels = computed(() => {
 const participantCount = computed(() => liveChannels.value.reduce((sum, channel) => sum + channel.usernames.length, 0))
 const requestCount = computed(() => liveChannels.value.reduce((sum, channel) => sum + channel.hourlyStatuses.reduce((total, hour) => total + hour.requests, 0), 0))
 const requestCountLabel = computed(() => new Intl.NumberFormat(locale.value, { notation: 'compact', maximumFractionDigits: 1 }).format(requestCount.value))
-const selectedShare = computed(() => selectedChannel.value
-  ? estimateConcurrencyShare(selectedChannel.value.maxConcurrency, selectedChannel.value.usernames.length - Number(selectedChannel.value.currentUserJoined), selectedChannel.value.personalConcurrency)
-  : null)
 
 watch(liveChannels, (next) => {
   if (!selectedChannel.value) return
@@ -161,7 +157,6 @@ function countByAvailability(availability: FilterValue) {
   return liveChannels.value.filter(channel => channel.availability === availability).length
 }
 function openJoinDialog(channel: CardChannel) {
-  if (channel.availability === 'full') return
   selectedChannel.value = channel
   showJoinDialog.value = true
 }
@@ -170,7 +165,6 @@ function handleJoin(name: string) {
     const channel = selectedChannel.value
     if (!channel) return
     if (!channel.currentUserJoined) {
-      channel.usernames = [...channel.usernames, 'preview_user']
       channel.currentUserJoined = true
       channel.availability = 'joined'
     }

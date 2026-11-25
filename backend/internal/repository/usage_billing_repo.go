@@ -283,15 +283,7 @@ func incrementUsageBillingSharedChannelPublicationBudget(ctx context.Context, tx
 	if !closed {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `WITH ended AS (
-		UPDATE shared_channel_memberships
-		SET ended_at = statement_timestamp()
-		WHERE publication_id = $1 AND ended_at IS NULL
-		RETURNING id
-	)
-	UPDATE api_keys SET status = 'disabled', updated_at = statement_timestamp()
-	WHERE shared_channel_membership_id IN (SELECT id FROM ended) AND deleted_at IS NULL`, publicationID)
-	return err
+	return revokeSharedChannelMemberships(ctx, tx, publicationID)
 }
 
 func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64) error {

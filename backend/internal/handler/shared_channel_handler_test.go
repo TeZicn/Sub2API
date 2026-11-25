@@ -13,60 +13,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSharedChannelModelsMatchGatewayCatalog(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	for _, platform := range []string{service.PlatformOpenAI, service.PlatformAnthropic, service.PlatformGemini, service.PlatformComposite} {
-		t.Run(platform, func(t *testing.T) {
-			group := &service.Group{ID: 9, Platform: platform, ModelAllowlist: service.GroupModelAllowlist{Enabled: true, Models: []string{"public-model"}}}
-			accountPlatform := platform
-			if platform == service.PlatformComposite {
-				accountPlatform = service.PlatformOpenAI
-			}
-			h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{
-				9: {{ID: 1, Platform: accountPlatform, Type: service.AccountTypeAPIKey, Credentials: map[string]any{
-					"model_mapping": map[string]any{"public-model": "private-upstream", "hidden-model": "hidden-upstream"},
-				}}},
-			}})
-			models, err := h.sharedChannelModelIDs(context.Background(), group)
-			require.NoError(t, err)
-			require.Equal(t, []string{"public-model"}, models)
-			rec := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(rec)
-			ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-			ctx.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{Group: group})
-			h.Models(ctx)
-			require.Equal(t, http.StatusOK, rec.Code)
-			var response gatewayModelsResponseForTest
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
-			require.Equal(t, modelIDsForTest(response.Data), models)
-		})
-	}
+type sharedChannelHandlerRepo struct {
+	service.SharedChannelRepository
+	published []service.PublishedSharedChannel
+	deletedID int64
 }
 
-func TestPublishedSharedChannelDoesNotExposeGroupID(t *testing.T) {
-	body, err := json.Marshal(service.PublishedSharedChannel{GroupID: 12, Models: []string{"public-model"}})
-	require.NoError(t, err)
-	require.NotContains(t, string(body), "group_id")
-	require.Contains(t, string(body), `"models":["public-model"]`)
+func (r *sharedChannelHandlerRepo) ListPublished(context.Context, int64) ([]service.PublishedSharedChannel, error) {
+	return r.published, nil
 }
 
-func TestSharedChannelDefaultModelsMatchGatewayCatalog(t *testing.T) {
+func (r *sharedChannelHandlerRepo) Delete(_ context.Context, id int64) error {
+	r.deletedID = id
+	return nil
+}
+
+func TestSharedChannelListUsesConfiguredDisplayModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, platform := range []string{service.PlatformOpenAI, service.PlatformAnthropic, service.PlatformGemini, service.PlatformGrok, service.PlatformTypeSafe, service.PlatformAntigravity, service.PlatformOpenCodeGo, service.PlatformComposite} {
-		t.Run(platform, func(t *testing.T) {
-			group := &service.Group{ID: 9, Platform: platform}
-			h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{})
-			models, err := h.sharedChannelModelIDs(context.Background(), group)
-			require.NoError(t, err)
-			rec := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(rec)
-			ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-			ctx.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{Group: group})
-			h.Models(ctx)
-			require.Equal(t, http.StatusOK, rec.Code)
-			var response gatewayModelsResponseForTest
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
-			require.Equal(t, modelIDsForTest(response.Data), models)
-		})
+	repo := &sharedChannelHandlerRepo{published: []service.PublishedSharedChannel{{ID: 1, GroupID: 12, Models: []string{"Custom model", "second-model"}}}}
+	h := NewSharedChannelHandler(service.NewSharedChannelService(repo, nil))
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/shared-channels", nil)
+	ctx.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 1})
+	h.List(ctx)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var payload struct {
+		Data []service.PublishedSharedChannel `json:"data"`
 	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []string{"Custom model", "second-model"}, payload.Data[0].Models)
+	require.NotContains(t, rec.Body.String(), "group_id")
+}
+
+func TestSharedChannelDeleteValidatesID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &sharedChannelHandlerRepo{}
+	h := NewSharedChannelHandler(service.NewSharedChannelService(repo, nil))
+	router := gin.New()
+	router.DELETE("/shared-channels/:id", h.AdminDelete)
+	for _, id := range []string{"invalid", "0", "-1"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/shared-channels/"+id, nil))
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Zero(t, repo.deletedID)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/shared-channels/9", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(9), repo.deletedID)
 }

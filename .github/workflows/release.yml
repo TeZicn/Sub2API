@@ -307,7 +307,7 @@ jobs:
 
       # Send Telegram notification
       - name: Send Telegram Notification
-        if: ${{ env.DRY_RUN != 'true' && env.SIMPLE_RELEASE != 'true' }}
+        if: ${{ env.DRY_RUN != 'true' && env.SIMPLE_RELEASE != 'true' && github.repository == 'Wei-Shaw/sub2api' }}
         env:
           TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

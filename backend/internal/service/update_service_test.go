@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -29,16 +30,85 @@ func (s *updateServiceCacheStub) SetUpdateInfo(_ context.Context, data string, _
 
 type updateServiceGitHubClientStub struct {
 	release        *GitHubRelease
+	latestErr      error
+	latestRepo     string
+	latestCalls    int
 	recentReleases []*GitHubRelease
 	recentErr      error
+	recentRepo     string
 }
 
-func (s *updateServiceGitHubClientStub) FetchLatestRelease(context.Context, string) (*GitHubRelease, error) {
-	return s.release, nil
+func (s *updateServiceGitHubClientStub) FetchLatestRelease(_ context.Context, repo string) (*GitHubRelease, error) {
+	s.latestRepo = repo
+	s.latestCalls++
+	return s.release, s.latestErr
 }
 
-func (s *updateServiceGitHubClientStub) FetchRecentReleases(context.Context, string, int) ([]*GitHubRelease, error) {
+func (s *updateServiceGitHubClientStub) FetchRecentReleases(_ context.Context, repo string, _ int) ([]*GitHubRelease, error) {
+	s.recentRepo = repo
 	return s.recentReleases, s.recentErr
+}
+
+func TestUpdateServiceUsesForkForUpdatesAndRollback(t *testing.T) {
+	client := &updateServiceGitHubClientStub{
+		release:        &GitHubRelease{TagName: "v0.2.26"},
+		recentReleases: []*GitHubRelease{{TagName: "v0.2.24"}},
+	}
+	svc := NewUpdateService(&updateServiceCacheStub{}, client, "0.2.25", "release")
+	info, err := svc.CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.True(t, info.HasUpdate)
+	require.Equal(t, "TeZicn/Sub2API", client.latestRepo)
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	require.Equal(t, "TeZicn/Sub2API", client.recentRepo)
+}
+
+func TestUpdateServiceRejectsCacheFromDifferentRepository(t *testing.T) {
+	for _, repo := range []string{"", "Wei-Shaw/sub2api"} {
+		t.Run("repository="+repo, func(t *testing.T) {
+			data, err := json.Marshal(map[string]any{
+				"repository": repo,
+				"latest":     "99.0.0",
+				"timestamp":  time.Now().Unix(),
+			})
+			require.NoError(t, err)
+			cache := &updateServiceCacheStub{data: string(data)}
+			client := &updateServiceGitHubClientStub{release: &GitHubRelease{TagName: "v0.2.26"}}
+			svc := NewUpdateService(cache, client, "0.2.25", "release")
+			info, err := svc.CheckUpdate(context.Background(), false)
+			require.NoError(t, err)
+			require.False(t, info.Cached)
+			require.Equal(t, "0.2.26", info.LatestVersion)
+			require.Equal(t, 1, client.latestCalls)
+
+			info, err = svc.CheckUpdate(context.Background(), false)
+			require.NoError(t, err)
+			require.True(t, info.Cached)
+			require.Equal(t, "0.2.26", info.LatestVersion)
+			require.Equal(t, 1, client.latestCalls)
+		})
+	}
+}
+
+func TestUpdateServiceDoesNotFallBackToUpstreamCacheOnFetchFailure(t *testing.T) {
+	data, err := json.Marshal(map[string]any{
+		"repository": "Wei-Shaw/sub2api",
+		"latest":     "99.0.0",
+		"timestamp":  time.Now().Unix(),
+	})
+	require.NoError(t, err)
+	svc := NewUpdateService(
+		&updateServiceCacheStub{data: string(data)},
+		&updateServiceGitHubClientStub{latestErr: errors.New("github unavailable")},
+		"0.2.26", "release",
+	)
+	info, err := svc.CheckUpdate(context.Background(), true)
+	require.NoError(t, err)
+	require.False(t, info.HasUpdate)
+	require.Nil(t, info.ReleaseInfo)
+	require.Contains(t, info.Warning, "github unavailable")
 }
 
 func (s *updateServiceGitHubClientStub) DownloadFile(context.Context, string, string, int64) error {

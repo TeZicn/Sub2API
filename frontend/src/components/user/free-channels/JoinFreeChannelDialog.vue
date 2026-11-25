@@ -4,6 +4,8 @@
     :title="t('freeChannels.joinDialog.title')"
     width="narrow"
     :close-on-click-outside="!loading"
+    :close-on-escape="!loading"
+    :show-close-button="!loading"
     @close="emit('close')"
   >
     <div data-testid="join-free-channel-dialog" class="space-y-5">
@@ -17,19 +19,9 @@
         </span>
         <div class="min-w-0">
           <p class="truncate text-sm font-semibold text-gray-900 dark:text-white">{{ channel.name }}</p>
-          <p class="mt-0.5 text-[11px] text-gray-500 dark:text-dark-300">{{ t('freeChannels.joinDialog.poolSummary', { count: channel.usernames.length + Number(!channel.currentUserJoined) }) }}</p>
         </div>
       </div>
 
-      <div class="rounded-2xl border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-900/50">
-        <div class="flex items-center justify-between gap-3">
-          <span class="text-xs text-gray-500 dark:text-dark-300">{{ t('freeChannels.joinDialog.yourShare') }}</span>
-          <span class="font-mono text-sm font-bold tabular-nums text-primary-700 dark:text-primary-300">
-            {{ channel.currentShare ?? (shareEstimate ? shareLabel : '—') }} {{ t('freeChannels.slots') }}
-          </span>
-        </div>
-        <p class="mt-3 text-[10px] leading-4 text-gray-500 dark:text-dark-400">{{ t('freeChannels.joinDialog.shareHint') }}</p>
-      </div>
       <label v-if="!createdKey" class="block space-y-1.5">
         <span class="text-xs font-semibold text-gray-700 dark:text-dark-200">{{ t('freeChannels.joinDialog.keyName') }}</span>
         <input v-model.trim="keyName" class="input" maxlength="100" :disabled="loading" :placeholder="t('freeChannels.joinDialog.keyNamePlaceholder')" />
@@ -61,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -70,8 +62,7 @@ import type { FreeChannelMock } from './freeChannelsMock'
 
 const props = defineProps<{
   show: boolean
-  channel: FreeChannelMock & { currentShare?: number }
-  shareEstimate: { min: number; max: number } | null
+  channel: FreeChannelMock
   loading?: boolean
   error?: string
   createdKey?: string
@@ -98,12 +89,5 @@ async function copyKey() {
     copyError.value = t('common.copyFailed')
   }
 }
-
-const shareLabel = computed(() => {
-  if (!props.shareEstimate) return ''
-  return props.shareEstimate.min === props.shareEstimate.max
-    ? String(props.shareEstimate.min)
-    : `${props.shareEstimate.min}–${props.shareEstimate.max}`
-})
 
 </script>

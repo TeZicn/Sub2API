@@ -530,15 +530,6 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 		// 检查用户是否可以绑定该分组
 		if !s.canUserBindGroup(ctx, user, group) {
-			memberships, err := s.sharedMemberships(ctx, userID)
-			if err != nil {
-				return nil, err
-			}
-			for _, m := range memberships {
-				if m.GroupID == *req.GroupID {
-					return s.createSharedChannelKey(ctx, m.PublicationID, userID, req)
-				}
-			}
 			return nil, ErrGroupNotAllowed
 		}
 	}
@@ -1123,19 +1114,10 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 		subscribedGroupIDs[sub.GroupID] = true
 	}
 
-	memberships, err := s.sharedMemberships(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	sharedGroups := make(map[int64]bool, len(memberships))
-	for _, m := range memberships {
-		sharedGroups[m.GroupID] = true
-	}
-
 	// 过滤出用户有权限的分组
 	availableGroups := make([]Group, 0)
 	for _, group := range allGroups {
-		if sharedGroups[group.ID] || s.canUserBindGroupInternal(user, &group, subscribedGroupIDs) {
+		if s.canUserBindGroupInternal(user, &group, subscribedGroupIDs) {
 			availableGroups = append(availableGroups, group)
 		}
 	}

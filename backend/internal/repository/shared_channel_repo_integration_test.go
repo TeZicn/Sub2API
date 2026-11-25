@@ -117,9 +117,14 @@ func TestSharedChannelRepositoryTimeAndAllocation(t *testing.T) {
 	_, memberID := joinSharedChannelKey(t, repo, p.ID, user.ID)
 	member, err := repo.FindMembership(ctx, memberID)
 	require.NoError(t, err)
+	require.Zero(t, member.Share(), "creating keys must not occupy active shares")
+	member, err = repo.ActivateMembership(ctx, memberID, user.ID, p.GroupID)
+	require.NoError(t, err)
 	require.Equal(t, 5, member.Share())
 	second := mustCreateUser(t, testEntClient(t), &service.User{Username: "second", Concurrency: 5})
-	joinSharedChannelKey(t, repo, p.ID, second.ID)
+	_, secondMemberID := joinSharedChannelKey(t, repo, p.ID, second.ID)
+	_, err = repo.ActivateMembership(ctx, secondMemberID, second.ID, p.GroupID)
+	require.NoError(t, err)
 	member, err = repo.FindMembership(ctx, memberID)
 	require.NoError(t, err)
 	require.Equal(t, 4, member.Share())
@@ -171,7 +176,7 @@ func TestSharedChannelMigrationsPreserveExistingData(t *testing.T) {
 	require.NoError(t, tx.QueryRowContext(ctx, "SELECT row_to_json(u)::text FROM users u WHERE id=$1", userID).Scan(&beforeUser))
 	require.NoError(t, tx.QueryRowContext(ctx, "SELECT to_jsonb(k)::text FROM api_keys k WHERE id=$1", keyID).Scan(&beforeKey))
 	for range 2 {
-		for _, name := range []string{"253_shared_channel_publications.sql", "254_shared_channel_budget.sql"} {
+		for _, name := range []string{"253_shared_channel_publications.sql", "254_shared_channel_budget.sql", "255_shared_channel_activity.sql", "256_shared_channel_deletion.sql", "257_shared_channel_display_models.sql"} {
 			body, err := dbmigrations.FS.ReadFile(name)
 			require.NoError(t, err)
 			_, err = tx.ExecContext(ctx, string(body))
@@ -185,6 +190,105 @@ func TestSharedChannelMigrationsPreserveExistingData(t *testing.T) {
 	require.JSONEq(t, beforeUser, afterUser)
 	require.JSONEq(t, beforeKey, afterKey)
 	require.False(t, membership.Valid)
+}
+
+func TestSharedChannelActivityExpiresWithoutRevokingKeys(t *testing.T) {
+	ctx := context.Background()
+	repo, p, first := sharedChannelFixture(t, false)
+	firstKey, firstID := joinSharedChannelKey(t, repo, p.ID, first.ID)
+	_, sameID := joinSharedChannelKey(t, repo, p.ID, first.ID)
+	require.Equal(t, firstID, sameID)
+	second := mustCreateUser(t, testEntClient(t), &service.User{Username: "active-second", Concurrency: 5})
+	_, secondID := joinSharedChannelKey(t, repo, p.ID, second.ID)
+	assertUsers := func(expected []string) {
+		t.Helper()
+		channels, err := repo.ListPublished(ctx, first.ID)
+		require.NoError(t, err)
+		for _, channel := range channels {
+			if channel.ID == p.ID {
+				require.Equal(t, expected, channel.Usernames)
+				require.True(t, channel.Joined, "idle users keep their existing keys and membership")
+				return
+			}
+		}
+		t.Fatal("publication missing")
+	}
+	assertUsers([]string{})
+	member, err := repo.ActivateMembership(ctx, firstID, first.ID, p.GroupID)
+	require.NoError(t, err)
+	require.Equal(t, 5, member.Share())
+	_, err = repo.ActivateMembership(ctx, sameID, first.ID, p.GroupID)
+	require.NoError(t, err)
+	assertUsers([]string{first.Username})
+	member, err = repo.ActivateMembership(ctx, secondID, second.ID, p.GroupID)
+	require.NoError(t, err)
+	require.Equal(t, 4, member.Share())
+	assertUsers([]string{first.Username, second.Username})
+
+	_, err = integrationDB.ExecContext(ctx, `UPDATE shared_channel_memberships
+		SET last_active_at = statement_timestamp() - interval '5 minutes 1 second' WHERE id = $1`, firstID)
+	require.NoError(t, err)
+	assertUsers([]string{second.Username})
+	member, err = repo.FindMembership(ctx, secondID)
+	require.NoError(t, err)
+	require.Equal(t, 5, member.Share(), "remaining user regains the personal cap")
+	member, err = repo.FindMembership(ctx, firstID)
+	require.NoError(t, err)
+	require.NotNil(t, member)
+	require.Zero(t, member.Share())
+	key, err := testEntClient(t).APIKey.Get(ctx, firstKey.ID)
+	require.NoError(t, err)
+	require.Equal(t, service.StatusActive, key.Status)
+
+	member, err = repo.ActivateMembership(ctx, firstID, first.ID, p.GroupID)
+	require.NoError(t, err)
+	require.Equal(t, 4, member.Share())
+	require.Equal(t, 2, member.Rank, "returning users rejoin at the end of the active order")
+	assertUsers([]string{second.Username, first.Username})
+	var before, after time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT last_active_at FROM shared_channel_memberships WHERE id=$1`, firstID).Scan(&before))
+	_, err = repo.ActivateMembership(ctx, firstID, second.ID, p.GroupID)
+	require.NoError(t, err)
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT last_active_at FROM shared_channel_memberships WHERE id=$1`, firstID).Scan(&after))
+	require.Equal(t, before, after, "a mismatched user cannot refresh activity")
+}
+
+func TestSharedChannelConcurrentActivityAdmission(t *testing.T) {
+	ctx := context.Background()
+	repo, p, first := sharedChannelFixture(t, false)
+	in := p.SharedChannelInput
+	in.MaxConcurrency = 1
+	_, err := repo.Save(ctx, p.ID, in)
+	require.NoError(t, err)
+	second := mustCreateUser(t, testEntClient(t), &service.User{Username: "waiting-user", Concurrency: 5})
+	_, firstID := joinSharedChannelKey(t, repo, p.ID, first.ID)
+	_, secondID := joinSharedChannelKey(t, repo, p.ID, second.ID)
+	type admission struct {
+		id, userID int64
+		err        error
+	}
+	start := make(chan struct{})
+	results := make(chan admission, 2)
+	for _, item := range []admission{{id: firstID, userID: first.ID}, {id: secondID, userID: second.ID}} {
+		go func(item admission) {
+			<-start
+			_, item.err = repo.ActivateMembership(ctx, item.id, item.userID, p.GroupID)
+			results <- item
+		}(item)
+	}
+	close(start)
+	a, b := <-results, <-results
+	if a.err != nil {
+		a, b = b, a
+	}
+	require.NoError(t, a.err)
+	require.ErrorIs(t, b.err, service.ErrSharedChannelFull)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE shared_channel_memberships
+		SET last_active_at = statement_timestamp() - interval '5 minutes 1 second' WHERE id = $1`, a.id)
+	require.NoError(t, err)
+	member, err := repo.ActivateMembership(ctx, b.id, b.userID, p.GroupID)
+	require.NoError(t, err)
+	require.Equal(t, 1, member.Share())
 }
 
 func TestSharedChannelRepositoryRejectsBothEndConditions(t *testing.T) {
@@ -215,4 +319,101 @@ func TestSharedChannelTimeModeIgnoresPendingBudgetPricingFailure(t *testing.T) {
 	member, err := repo.FindMembership(ctx, memberID)
 	require.NoError(t, err)
 	require.NotNil(t, member, "an earlier budget request cannot pause a time-based service")
+}
+
+func TestSharedChannelDeletePreservesHistoryAndAllowsGroupReuse(t *testing.T) {
+	ctx := context.Background()
+	repo, p, user := sharedChannelFixture(t, true)
+	key, memberID := joinSharedChannelKey(t, repo, p.ID, user.ID)
+	secondKey, _ := joinSharedChannelKey(t, repo, p.ID, user.ID)
+	ordinary := mustCreateApiKey(t, testEntClient(t), &service.APIKey{UserID: user.ID, Key: "sk-ordinary-" + uuid.NewString()})
+	account := mustCreateAccount(t, testEntClient(t), &service.Account{Name: "shared-history-" + uuid.NewString()})
+	usage := &service.UsageLog{UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID,
+		RequestID: uuid.NewString(), Model: "public-model", InputTokens: 10, TotalCost: 1, ActualCost: 1}
+	usageRepo := newUsageLogRepositoryWithSQL(testEntClient(t), integrationDB)
+	_, err := usageRepo.Create(ctx, usage)
+	require.NoError(t, err)
+	billing := NewUsageBillingRepository(testEntClient(t), integrationDB)
+	cmd := &service.UsageBillingCommand{RequestID: usage.RequestID, UserID: user.ID, APIKeyID: key.ID,
+		SharedChannelMembershipID: memberID, SharedChannelBudgetCost: 1}
+	_, err = billing.Apply(ctx, cmd)
+	require.NoError(t, err)
+	require.NoError(t, repo.Delete(ctx, p.ID))
+	require.ErrorIs(t, repo.Delete(ctx, p.ID), service.ErrSharedChannelNotFound)
+	for _, id := range []int64{key.ID, secondKey.ID, ordinary.ID} {
+		var status string
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT status FROM api_keys WHERE id=$1", id).Scan(&status))
+		if id == ordinary.ID {
+			require.Equal(t, service.StatusActive, status)
+		} else {
+			require.Equal(t, service.StatusAPIKeyDisabled, status)
+		}
+	}
+	member, err := repo.FindMembership(ctx, memberID)
+	require.NoError(t, err)
+	require.Nil(t, member)
+	member, err = repo.ActivateMembership(ctx, memberID, user.ID, p.GroupID)
+	require.NoError(t, err)
+	require.Nil(t, member)
+	items, err := repo.List(ctx)
+	require.NoError(t, err)
+	for _, item := range items {
+		require.NotEqual(t, p.ID, item.ID)
+	}
+	published, err := repo.ListPublished(ctx, user.ID)
+	require.NoError(t, err)
+	for _, item := range published {
+		require.NotEqual(t, p.ID, item.ID)
+	}
+	_, err = repo.Save(ctx, p.ID, p.SharedChannelInput)
+	require.ErrorIs(t, err, service.ErrSharedChannelNotFound)
+	err = repo.WithMembership(ctx, p.ID, user.ID, func(context.Context, service.SharedChannelMembership) error {
+		t.Fatal("deleted publication must not issue keys")
+		return nil
+	})
+	require.ErrorIs(t, err, service.ErrSharedChannelNotFound)
+	replacement, err := repo.Save(ctx, 0, p.SharedChannelInput)
+	require.NoError(t, err)
+	require.NotEqual(t, p.ID, replacement.ID)
+	_, newMember := joinSharedChannelKey(t, repo, replacement.ID, user.ID)
+	require.NotEqual(t, memberID, newMember)
+	// Deletion must not break late settlement or recreate old grants.
+	cmd.RequestID = uuid.NewString()
+	_, err = billing.Apply(ctx, cmd)
+	require.NoError(t, err)
+	var used, replacementUsed float64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT budget_used FROM shared_channel_publications WHERE id=$1", p.ID).Scan(&used))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT budget_used FROM shared_channel_publications WHERE id=$1", replacement.ID).Scan(&replacementUsed))
+	require.Equal(t, 2.0, used)
+	require.Zero(t, replacementUsed)
+	var logs, bills int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT count(*) FROM usage_logs WHERE api_key_id=$1", key.ID).Scan(&logs))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT count(*) FROM usage_billing_dedup WHERE api_key_id=$1", key.ID).Scan(&bills))
+	require.Equal(t, 1, logs)
+	require.Equal(t, 2, bills)
+}
+
+func TestSharedChannelCustomModelsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo, p, user := sharedChannelFixture(t, false)
+	input := p.SharedChannelInput
+	input.Models = []string{"Custom display model", "model-two"}
+	saved, err := repo.Save(ctx, p.ID, input)
+	require.NoError(t, err)
+	require.Equal(t, input.Models, saved.Models)
+	published, err := repo.ListPublished(ctx, user.ID)
+	require.NoError(t, err)
+	found := false
+	for _, item := range published {
+		if item.ID == p.ID {
+			found = true
+			require.Equal(t, input.Models, item.Models)
+		}
+	}
+	require.True(t, found)
+	input.Models = []string{}
+	saved, err = repo.Save(ctx, p.ID, input)
+	require.NoError(t, err)
+	require.Empty(t, saved.Models)
+	require.NotNil(t, saved.Models)
 }

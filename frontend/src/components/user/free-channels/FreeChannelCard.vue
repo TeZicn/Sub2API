@@ -130,7 +130,7 @@
 
       </section>
 
-      <section class="mt-5 min-h-[61px] min-w-0" :aria-label="t('freeChannels.participants')">
+      <section ref="participantsRef" class="mt-5 min-h-[61px] min-w-0" :aria-label="t('freeChannels.participants')" @keydown.esc="selectedUsername = null">
         <div class="flex items-center justify-between gap-2">
           <h3 class="text-[11px] font-semibold text-gray-600 dark:text-dark-200">{{ t('freeChannels.participants') }}</h3>
           <span v-if="channel.usernames.length" class="text-[10px] tabular-nums text-gray-400 dark:text-dark-400">
@@ -138,17 +138,24 @@
           </span>
         </div>
         <div v-if="channel.usernames.length" class="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <span
+          <div
             v-for="(username, index) in visibleUsernames"
             :key="username"
-            class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-gray-100 bg-white py-1 pl-1 pr-2.5 text-[10px] font-medium text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-dark-200"
+            class="relative"
           >
-            <span class="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[8px] font-bold" :class="avatarClass(index)">{{ avatarInitial(username) }}</span>
-            <span class="max-w-[94px] truncate">{{ username }}</span>
-          </span>
-          <span v-if="hiddenUserCount" class="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-300">
-            {{ t('freeChannels.morePeople', { count: hiddenUserCount }) }}
-          </span>
+            <button
+              type="button"
+              data-testid="shared-user-avatar"
+              class="grid h-8 w-8 place-items-center rounded-full text-[11px] font-bold ring-2 ring-white transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-primary-500 dark:ring-dark-800"
+              :class="avatarClass(index)"
+              :aria-label="t('freeChannels.viewUser', { name: username })"
+              :aria-expanded="selectedUsername === username"
+              :aria-describedby="selectedUsername === username ? `shared-user-${channel.id}-${index}` : undefined"
+              @click="selectedUsername = selectedUsername === username ? null : username"
+            >{{ avatarInitial(username) }}</button>
+            <div v-if="selectedUsername === username" :id="`shared-user-${channel.id}-${index}`" role="tooltip" class="absolute bottom-full left-0 z-20 mb-2 w-max max-w-[220px] break-all rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-800 shadow-lg dark:border-dark-600 dark:bg-dark-700 dark:text-white">{{ username }}</div>
+          </div>
+          <button v-if="hiddenUserCount" type="button" class="h-8 rounded-full bg-gray-100 px-2.5 text-[10px] font-medium text-gray-500 hover:bg-gray-200 dark:bg-dark-700 dark:text-dark-300" :aria-label="t('freeChannels.morePeople', { count: hiddenUserCount })" @click="participantsExpanded = true">+{{ hiddenUserCount }}</button>
         </div>
         <p v-else class="mt-2.5 text-[10px] text-gray-400 dark:text-dark-400">{{ t('freeChannels.noParticipants') }}</p>
       </section>
@@ -158,7 +165,6 @@
           type="button"
           class="group/join relative inline-flex w-full items-center justify-center gap-2.5 rounded-[14px] border px-4 py-3 text-[12px] font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-800"
           :class="buttonClass"
-          :disabled="channel.availability === 'full'"
           :data-testid="`join-free-channel-${channel.id}`"
           @click="emit('join')"
         >
@@ -166,7 +172,7 @@
             <Icon :name="buttonIcon" size="sm" />
           </span>
           <span>{{ buttonLabel }}</span>
-          <Icon v-if="channel.availability !== 'full'" name="arrowRight" size="xs" class="absolute right-4 opacity-60 transition-transform group-hover/join:translate-x-0.5 group-hover/join:opacity-100" />
+          <Icon name="arrowRight" size="xs" class="absolute right-4 opacity-60 transition-transform group-hover/join:translate-x-0.5 group-hover/join:opacity-100" />
         </button>
       </footer>
     </div>
@@ -176,7 +182,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useNow } from '@vueuse/core'
+import { onClickOutside, useNow } from '@vueuse/core'
 import Icon from '@/components/icons/Icon.vue'
 import ProviderIcon from '@/components/user/monitor/ProviderIcon.vue'
 import { estimateConcurrencyShare, type FreeChannelMock } from './freeChannelsMock'
@@ -193,6 +199,10 @@ const emit = defineEmits<{
 const { t, locale } = useI18n()
 const now = useNow({ interval: 1000 })
 const modelsExpanded = ref(false)
+const participantsExpanded = ref(false)
+const participantsRef = ref<HTMLElement | null>(null)
+const selectedUsername = ref<string | null>(null)
+onClickOutside(participantsRef, () => { selectedUsername.value = null })
 const meterSegments = computed(() => Math.min(20, props.channel.maxConcurrency))
 const visibleModels = computed(() => modelsExpanded.value ? props.channel.models : props.channel.models.slice(0, 3))
 
@@ -272,19 +282,16 @@ function formatMoney(value: number | null | undefined) {
   return new Intl.NumberFormat(locale.value, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(value ?? 0)
 }
 
-const visibleUsernames = computed(() => props.channel.usernames.slice(0, 3))
+const visibleUsernames = computed(() => participantsExpanded.value ? props.channel.usernames : props.channel.usernames.slice(0, 8))
 const hiddenUserCount = computed(() => Math.max(0, props.channel.usernames.length - visibleUsernames.value.length))
 
 const buttonLabel = computed(() => {
   if (props.channel.availability === 'joined') return t('freeChannels.createAnotherKey')
-  if (props.channel.availability === 'full') return t('freeChannels.capacityFull')
   return t('freeChannels.joinAndCreateKey')
 })
 
-const buttonIcon = computed(() => props.channel.availability === 'full' ? 'ban' : props.channel.availability === 'joined' ? 'key' : 'plus')
-const buttonClass = computed(() => props.channel.availability !== 'full'
-  ? 'border-primary-200 bg-primary-50/90 text-primary-800 shadow-sm hover:-translate-y-0.5 hover:border-primary-300 hover:bg-primary-100 hover:shadow-md active:translate-y-0 dark:border-primary-800/80 dark:bg-primary-950/45 dark:text-primary-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/50'
-  : 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400 dark:border-dark-700 dark:bg-dark-800/60 dark:text-dark-400')
+const buttonIcon = computed(() => props.channel.availability === 'joined' ? 'key' : 'plus')
+const buttonClass = 'border-primary-200 bg-primary-50/90 text-primary-800 shadow-sm hover:-translate-y-0.5 hover:border-primary-300 hover:bg-primary-100 hover:shadow-md active:translate-y-0 dark:border-primary-800/80 dark:bg-primary-950/45 dark:text-primary-200 dark:hover:border-primary-700 dark:hover:bg-primary-900/50'
 
 function shareSegmentClass(index: number) {
   if (!shareEstimate.value) return 'bg-gray-300 dark:bg-dark-600'

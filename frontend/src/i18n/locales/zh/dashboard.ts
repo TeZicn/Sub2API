@@ -116,6 +116,7 @@ export default {
     nameLabel: '名称',
     namePlaceholder: '我的 API 密钥',
     groupLabel: '分组',
+    sharedGroupFixed: '由共享服务绑定，无法切换分组',
     providerLabel: '厂商',
     providers: {
       anthropic: 'Anthropic',
@@ -586,7 +587,7 @@ export default {
       all: '全部',
       open: '可加入',
       joined: '已加入',
-      full: '名额已满'
+      full: '当前繁忙'
     },
     summary: {
       openPools: '可加入渠道',
@@ -603,7 +604,7 @@ export default {
     availability: {
       open: '可加入',
       joined: '已加入',
-      full: '名额已满'
+      full: '当前繁忙'
     },
     publishedRemaining: '发布剩余时间',
     longTerm: '长期有效',
@@ -628,11 +629,12 @@ export default {
     slots: '个请求',
     peopleUsing: '人使用',
     shareMeterLabel: '加入后预计每人可同时请求 {min} 到 {max} 个，共 {total} 个',
-    capacityFull: '名额已满',
+    capacityFull: '当前繁忙',
     participants: '正在使用的用户',
     peopleCount: '{count} 人',
     morePeople: '另有 {count} 人',
-    noParticipants: '还没有用户加入',
+    noParticipants: '暂无活跃用户',
+    viewUser: '查看用户 {name}',
     joinAndCreateKey: '加入并创建 Key',
     alreadyJoined: '已加入此服务',
     createAnotherKey: '再创建一把 Key',
@@ -648,11 +650,6 @@ export default {
       title: '加入共享服务',
       previewNotice: '当前是设计预览，加入只会修改本地展示数据。',
       doneAction: '完成',
-      poolSummary: '加入后将有 {count} 位用户参与均分',
-      yourShare: '加入后预计分到',
-      shareBreakdown: '预计同时请求额度',
-      shareHint: '同一账户创建的多个 Key 共用这份请求额度。',
-      keyHint: '你也可以在 API 密钥页面继续创建 Key；同一账号的 Key 共用请求额度。',
       keyName: 'API Key 名称',
       keyNamePlaceholder: '例如：我的共享服务 Key',
       keyCreated: 'API Key 已创建',

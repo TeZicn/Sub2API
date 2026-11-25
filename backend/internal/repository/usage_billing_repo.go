@@ -9,6 +9,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 type usageBillingRepository struct {
@@ -51,6 +52,9 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 	}
 
 	result := &service.UsageBillingApplyResult{Applied: true}
+	if err := lockUsageBillingSharedChannels(ctx, tx, []*service.UsageBillingCommand{cmd}, []bool{true}); err != nil {
+		return nil, err
+	}
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
 		return nil, err
 	}
@@ -210,8 +214,84 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		}
 		result.QuotaState = quotaState
 	}
+	if err := incrementUsageBillingSharedChannelBudget(ctx, tx, cmd); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+// 与发布配置及加入操作使用相同的锁顺序：先发布行，再成员及 Key。
+// 在普通计费效果锁住 Key 之前加锁，避免额度耗尽撤销权限时产生反向等待。
+func lockUsageBillingSharedChannels(ctx context.Context, tx *sql.Tx, cmds []*service.UsageBillingCommand, applied []bool) error {
+	ids := make([]int64, 0)
+	for i, cmd := range cmds {
+		if applied[i] && cmd.SharedChannelMembershipID > 0 {
+			ids = append(ids, cmd.SharedChannelMembershipID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT p.id FROM shared_channel_publications p
+		WHERE p.id IN (SELECT publication_id FROM shared_channel_memberships WHERE id = ANY($1))
+		ORDER BY p.id FOR UPDATE`, pq.Array(ids))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func incrementUsageBillingSharedChannelBudget(ctx context.Context, tx *sql.Tx, cmd *service.UsageBillingCommand) error {
+	if cmd == nil || cmd.SharedChannelMembershipID <= 0 {
+		return nil
+	}
+	var publicationID int64
+	if err := tx.QueryRowContext(ctx, `SELECT publication_id FROM shared_channel_memberships WHERE id = $1`, cmd.SharedChannelMembershipID).Scan(&publicationID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("shared channel membership missing during usage settlement")
+		}
+		return err
+	}
+	return incrementUsageBillingSharedChannelPublicationBudget(ctx, tx, publicationID, cmd.SharedChannelBudgetCost, cmd.SharedChannelPricingBlocked)
+}
+
+func incrementUsageBillingSharedChannelPublicationBudget(ctx context.Context, tx *sql.Tx, publicationID int64, amount float64, pricingBlocked bool) error {
+	var closed bool
+	err := tx.QueryRowContext(ctx, `UPDATE shared_channel_publications p
+		SET budget_used = p.budget_used + $1,
+			budget_pricing_blocked = p.budget_limit IS NOT NULL AND (p.budget_pricing_blocked OR $2),
+			updated_at = statement_timestamp()
+		WHERE p.id = $3
+		RETURNING p.id, (p.budget_pricing_blocked OR
+			(p.budget_limit IS NOT NULL AND p.budget_used >= p.budget_limit))`,
+		amount, pricingBlocked, publicationID,
+	).Scan(new(int64), &closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("shared channel membership missing during usage settlement")
+	}
+	if err != nil {
+		return err
+	}
+	if !closed {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `WITH ended AS (
+		UPDATE shared_channel_memberships
+		SET ended_at = statement_timestamp()
+		WHERE publication_id = $1 AND ended_at IS NULL
+		RETURNING id
+	)
+	UPDATE api_keys SET status = 'disabled', updated_at = statement_timestamp()
+	WHERE shared_channel_membership_id IN (SELECT id FROM ended) AND deleted_at IS NULL`, publicationID)
+	return err
 }
 
 func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscriptionID int64, costUSD float64) error {

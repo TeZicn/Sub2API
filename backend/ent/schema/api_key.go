@@ -44,6 +44,7 @@ func (APIKey) Fields() []ent.Field {
 		field.Int64("group_id").
 			Optional().
 			Nillable(),
+		field.Int64("shared_channel_membership_id").Optional().Nillable().Immutable(),
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),

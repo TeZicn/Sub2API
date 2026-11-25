@@ -188,7 +188,7 @@ func exchangeDevinCode(ctx context.Context, client *http.Client, endpoint, code,
 	if err != nil {
 		return "", &DevinOAuthError{StatusCode: http.StatusBadGateway, Message: "could not reach Devin authorization service"}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return "", &DevinOAuthError{StatusCode: http.StatusBadGateway, Message: "Devin did not accept the authorization code"}
 	}

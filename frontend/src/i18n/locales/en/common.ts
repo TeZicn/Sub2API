@@ -179,6 +179,8 @@ export default {
     groups: 'Groups',
     channels: 'Channels',
     availableChannels: 'Available Channels',
+    freeChannels: 'Shared services',
+    sharedChannels: 'Shared services',
     modelPlaza: 'Model Plaza',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',

@@ -852,10 +852,12 @@ func ProvideAPIKeyService(
 	cfg *config.Config,
 	billingCacheService *BillingCacheService,
 	concurrencyService *ConcurrencyService,
+	sharedChannels SharedChannelRepository,
 ) *APIKeyService {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
 	svc.SetConcurrencyService(concurrencyService)
+	svc.SetSharedChannelRepository(sharedChannels)
 	return svc
 }
 
@@ -867,6 +869,7 @@ var ProviderSet = wire.NewSet(
 	NewUserService,
 	NewMCPOAuthService,
 	ProvideAPIKeyService,
+	NewSharedChannelService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
 	NewGroupService,

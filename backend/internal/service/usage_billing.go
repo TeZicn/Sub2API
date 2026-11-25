@@ -37,11 +37,14 @@ type UsageBillingCommand struct {
 	ImageCount          int
 	MediaType           string
 
-	BalanceCost         float64
-	SubscriptionCost    float64
-	APIKeyQuotaCost     float64
-	APIKeyRateLimitCost float64
-	AccountQuotaCost    float64
+	BalanceCost                 float64
+	SubscriptionCost            float64
+	APIKeyQuotaCost             float64
+	APIKeyRateLimitCost         float64
+	AccountQuotaCost            float64
+	SharedChannelMembershipID   int64
+	SharedChannelBudgetCost     float64
+	SharedChannelPricingBlocked bool
 
 	// AccountQuotaHasDailyLimit / AccountQuotaHasWeeklyLimit 记录构造命令时账号是否设置了日/周上限，
 	// 只用于选择账号配额累加语句，不参与幂等指纹；实际累加哪些维度以数据库中的账号配置为准。
@@ -91,6 +94,7 @@ func (c *UsageBillingCommand) quantizeMonetaryFields() {
 	c.APIKeyQuotaCost = QuantizeUsageBillingAmount(c.APIKeyQuotaCost)
 	c.APIKeyRateLimitCost = QuantizeUsageBillingAmount(c.APIKeyRateLimitCost)
 	c.AccountQuotaCost = QuantizeUsageBillingAmount(c.AccountQuotaCost)
+	c.SharedChannelBudgetCost = QuantizeUsageBillingAmount(c.SharedChannelBudgetCost)
 }
 
 // QuantizeUsageBillingAmount 把金额舍入到 UsageBillingMonetaryScale 位小数，
@@ -134,6 +138,9 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		c.APIKeyRateLimitCost,
 		c.AccountQuotaCost,
 	)
+	if c.SharedChannelMembershipID > 0 {
+		raw += fmt.Sprintf("|%d|%.10f|%t", c.SharedChannelMembershipID, c.SharedChannelBudgetCost, c.SharedChannelPricingBlocked)
+	}
 	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
 		raw += "|" + payloadHash
 	}

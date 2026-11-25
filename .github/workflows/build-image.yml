@@ -1,0 +1,76 @@
+name: Build deployment image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployment-image-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify-shared-services:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Verify shared service lifecycle and migration preservation
+        working-directory: backend
+        run: go test -tags integration ./internal/repository -run '^TestSharedChannel' -count=1 -v
+
+  image:
+    needs: verify-shared-services
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Resolve immutable image tag
+        id: image
+        shell: bash
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/sub2api"
+          echo "tag=${repository}:shared-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=$(cat backend/cmd/server/VERSION)-shared.${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 2
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish deployment image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.image.outputs.version }}
+            COMMIT=${{ github.sha }}
+            GOPROXY=https://proxy.golang.org,direct
+            GOSUMDB=sum.golang.org
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=deployment-image
+          cache-to: type=gha,scope=deployment-image,mode=max
+      - name: Record published digest
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "Image: $IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Digest: $IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"

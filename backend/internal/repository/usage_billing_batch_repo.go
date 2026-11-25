@@ -38,7 +38,7 @@ type usageBillingRequestKey struct {
 //   - 逐条命令的扣费后余额、是否透支、Key 额度是否在该条耗尽、账号额度状态，
 //     由合并语句返回的累加后值按命令顺序推算。
 //
-// 行锁按 user_subscriptions → users → api_keys → accounts 的顺序获取，表内按主键升序，
+// 行锁按 shared_channel_publications → user_subscriptions → users → api_keys → accounts 的顺序获取，表内按主键升序，
 // 与 Apply 的加锁顺序一致。
 //
 // 命令校验失败（混合用户、重复请求键、缺 request_id、非有限金额）时直接返回 error。
@@ -77,6 +77,9 @@ func (r *usageBillingRepository) ApplyBatch(ctx context.Context, cmds []*service
 		}
 	}
 
+	if err := lockUsageBillingSharedChannels(ctx, tx, cmds, applied); err != nil {
+		return nil, err
+	}
 	if err := applyUsageBillingBatchSubscriptions(ctx, tx, cmds, applied); err != nil {
 		return nil, err
 	}
@@ -90,11 +93,50 @@ func (r *usageBillingRepository) ApplyBatch(ctx context.Context, cmds []*service
 		return nil, err
 	}
 
+	if err := applyUsageBillingBatchSharedChannelBudgets(ctx, tx, cmds, applied); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	tx = nil
 	return outcomes, nil
+}
+
+func applyUsageBillingBatchSharedChannelBudgets(ctx context.Context, tx *sql.Tx, cmds []*service.UsageBillingCommand, applied []bool) error {
+	type publicationCost struct {
+		amount  float64
+		blocked bool
+	}
+	costs := make(map[int64]publicationCost)
+	for i, cmd := range cmds {
+		if !applied[i] || cmd.SharedChannelMembershipID <= 0 {
+			continue
+		}
+		var publicationID int64
+		if err := tx.QueryRowContext(ctx, `SELECT publication_id FROM shared_channel_memberships WHERE id = $1`, cmd.SharedChannelMembershipID).Scan(&publicationID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errors.New("shared channel membership missing during usage settlement")
+			}
+			return err
+		}
+		entry := costs[publicationID]
+		entry.amount += cmd.SharedChannelBudgetCost
+		entry.blocked = entry.blocked || cmd.SharedChannelPricingBlocked
+		costs[publicationID] = entry
+	}
+	publicationIDs := make([]int64, 0, len(costs))
+	for id := range costs {
+		publicationIDs = append(publicationIDs, id)
+	}
+	sort.Slice(publicationIDs, func(i, j int) bool { return publicationIDs[i] < publicationIDs[j] })
+	for _, id := range publicationIDs {
+		entry := costs[id]
+		if err := incrementUsageBillingSharedChannelPublicationBudget(ctx, tx, id, entry.amount, entry.blocked); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateUsageBillingBatch 规范化命令并校验：非空、request_id 非空、同一用户、(request_id, api_key_id) 互不相同。
@@ -109,7 +151,7 @@ func validateUsageBillingBatch(cmds []*service.UsageBillingCommand) (int64, erro
 		if cmd.RequestID == "" {
 			return 0, service.ErrUsageBillingRequestIDRequired
 		}
-		for _, amount := range []float64{cmd.BalanceCost, cmd.SubscriptionCost, cmd.APIKeyQuotaCost, cmd.APIKeyRateLimitCost, cmd.AccountQuotaCost} {
+		for _, amount := range []float64{cmd.BalanceCost, cmd.SubscriptionCost, cmd.APIKeyQuotaCost, cmd.APIKeyRateLimitCost, cmd.AccountQuotaCost, cmd.SharedChannelBudgetCost} {
 			if math.IsNaN(amount) || math.IsInf(amount, 0) {
 				return 0, errUsageBillingBatchNonFiniteAmount
 			}

@@ -974,13 +974,13 @@ func replaceSSEData(frame, data []byte) []byte {
 	var updated bytes.Buffer
 	for _, line := range bytes.Split(frame, []byte("\n")) {
 		if bytes.HasPrefix(line, []byte("data:")) {
-			updated.WriteString("data: ")
-			updated.Write(data)
-			updated.WriteByte('\n')
+			_, _ = updated.WriteString("data: ")
+			_, _ = updated.Write(data)
+			_ = updated.WriteByte('\n')
 			continue
 		}
-		updated.Write(line)
-		updated.WriteByte('\n')
+		_, _ = updated.Write(line)
+		_ = updated.WriteByte('\n')
 	}
 	return updated.Bytes()
 }

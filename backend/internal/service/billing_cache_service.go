@@ -762,14 +762,14 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			return err
 		}
-	} else {
+	} else if !apiKey.IsSharedChannel() {
 		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
 			return err
 		}
 	}
 
 	// user × platform quota 仅在 standard（余额）模式生效；订阅模式豁免
-	if !isSubscriptionMode {
+	if !isSubscriptionMode && !apiKey.IsSharedChannel() {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
 		}
@@ -798,6 +798,9 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 // 返回的句柄可能为 nil（未登记任何预留）；调用方须在 handler 结束时调用 HandlerDone，预留在计费任务落库后释放。
 // 须在 CheckBillingEligibility 通过后调用；简易模式不校验。
 func (s *BillingCacheService) ReserveFixedCharge(ctx context.Context, user *User, apiKey *APIKey, group *Group, subscription *UserSubscription, amount float64) (*InflightReservation, error) {
+	if apiKey.IsSharedChannel() {
+		return nil, nil
+	}
 	if user == nil || amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		return nil, nil
 	}

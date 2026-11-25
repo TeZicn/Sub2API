@@ -1175,54 +1175,17 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	if platform == service.PlatformComposite {
-		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID, "", true)
-		if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
-			source := availableModels
-			if len(source) == 0 {
-				source = defaultModelIDsForPlatform(service.PlatformComposite)
-			}
-			writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.ModelAllowlist.FilterForListing(source))
-			return
-		}
-		if len(availableModels) > 0 {
-			writeModelsList(c, service.PlatformComposite, availableModels)
-			return
-		}
-		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
-		return
+	var group *service.Group
+	if apiKey != nil {
+		group = apiKey.Group
 	}
-
-	// Get available models from account configurations for the selected group platform.
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
-	if platform == service.PlatformAnthropic {
-		var group *service.Group
-		if apiKey != nil {
-			group = apiKey.Group
-		}
-		source := availableModels
-		if group != nil && group.ModelAllowlistEnabled() {
-			source = modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
-		} else if len(source) == 0 {
-			source = defaultModelIDsForPlatform(platform)
-		}
-		expanded := h.gatewayService.ExpandAnthropicLongContextModels(c.Request.Context(), group, source)
-		if len(availableModels) > 0 || len(expanded) > len(source) || (group != nil && group.ModelAllowlistEnabled()) {
-			availableModels = expanded
-		}
-	}
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
-		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
-		writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
-		return
-	}
-
-	if len(availableModels) > 0 || (platform == service.PlatformOpenAI && availableModels != nil) {
-		writeModelsList(c, platform, availableModels)
+	if models, configured := h.configuredModelIDs(c.Request.Context(), group, groupID, platform); configured {
+		writeModelsList(c, platform, models)
 		return
 	}
 
 	// Fallback to default models
+	platform = gatewayModelsFallbackPlatform(platform)
 	if platform == service.PlatformOpenAI {
 		writeModelsListResponse(c, openai.DefaultModels)
 		return
@@ -1242,6 +1205,50 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	writeModelsListResponse(c, claude.DefaultModels)
+}
+
+// configuredModelIDs 是网关和共享服务卡片共用的模型目录规则。
+// 第二个返回值区分显式空目录与沿用平台默认目录。
+func (h *GatewayHandler) configuredModelIDs(ctx context.Context, group *service.Group, groupID *int64, platform string) ([]string, bool) {
+	if platform == service.PlatformComposite {
+		availableModels := h.compositeAvailableModels(ctx, groupID, "", true)
+		if group.ModelAllowlistEnabled() {
+			source := availableModels
+			if len(source) == 0 {
+				source = defaultModelIDsForPlatform(service.PlatformComposite)
+			}
+			return group.ModelAllowlist.FilterForListing(source), true
+		}
+		if len(availableModels) > 0 {
+			return availableModels, true
+		}
+		return defaultModelIDsForPlatform(service.PlatformComposite), true
+	}
+
+	// Get available models from account configurations for the selected group platform.
+	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
+	if platform == service.PlatformAnthropic {
+		source := availableModels
+		if group != nil && group.ModelAllowlistEnabled() {
+			source = modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
+		} else if len(source) == 0 {
+			source = defaultModelIDsForPlatform(platform)
+		}
+		expanded := h.gatewayService.ExpandAnthropicLongContextModels(ctx, group, source)
+		if len(availableModels) > 0 || len(expanded) > len(source) || (group != nil && group.ModelAllowlistEnabled()) {
+			availableModels = expanded
+		}
+	}
+	if group.ModelAllowlistEnabled() {
+		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
+		return group.ModelAllowlist.FilterForListing(source), true
+	}
+
+	if len(availableModels) > 0 || (platform == service.PlatformOpenAI && availableModels != nil) {
+		return availableModels, true
+	}
+
+	return nil, false
 }
 
 // CodexModels returns the effective group model list using the manifest shape
@@ -1501,6 +1508,16 @@ func defaultCodexModelIDsForPlatform(platform string) []string {
 		return []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"}
 	default:
 		return defaultModelIDsForPlatform(platform)
+	}
+}
+
+// 保持未配置目录时 /v1/models 的既有回退规则，供共享卡片复用。
+func gatewayModelsFallbackPlatform(platform string) string {
+	switch platform {
+	case service.PlatformOpenAI, service.PlatformGemini, service.PlatformGrok, service.PlatformTypeSafe:
+		return platform
+	default:
+		return service.PlatformAnthropic
 	}
 }
 

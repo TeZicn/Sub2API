@@ -28,14 +28,17 @@ func IsWindowExpired(windowStart *time.Time, duration time.Duration) bool {
 }
 
 type APIKey struct {
-	ID          int64
-	UserID      int64
-	Key         string
-	Name        string
-	GroupID     *int64
-	Status      string
-	IPWhitelist []string
-	IPBlacklist []string
+	ID                            int64
+	UserID                        int64
+	Key                           string
+	Name                          string
+	GroupID                       *int64
+	SharedChannelMembershipID     *int64
+	SharedChannelBudgetMultiplier float64 `json:"-"`
+	SharedChannelBudgetEnabled    bool    `json:"-"`
+	Status                        string
+	IPWhitelist                   []string
+	IPBlacklist                   []string
 	// 预编译的 IP 规则，用于认证热路径避免重复 ParseIP/ParseCIDR。
 	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
 	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`
@@ -66,6 +69,11 @@ type APIKey struct {
 
 func (k *APIKey) IsActive() bool {
 	return k.Status == StatusActive
+}
+
+// 共享服务由发布者承担费用；授权有效性仍由实时成员查询校验。
+func (k *APIKey) IsSharedChannel() bool {
+	return k != nil && k.SharedChannelMembershipID != nil && *k.SharedChannelMembershipID > 0
 }
 
 // HasRateLimits returns true if any rate limit window is configured

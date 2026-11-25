@@ -18,6 +18,13 @@ import { resolveRouteDocumentTitle } from './title'
  * Route definitions with lazy loading
  */
 const routes: RouteRecordRaw[] = [
+  ...(import.meta.env.DEV ? [{
+    path: '/preview/shared-channels-admin',
+    name: 'SharedChannelsAdminPreview',
+    component: () => import('@/views/admin/SharedChannelsView.vue'),
+    props: { preview: true },
+    meta: { requiresAuth: false, title: 'Shared Service Preview', titleKey: 'admin.sharedChannels.title' },
+  }] : []),
   // ==================== Setup Routes ====================
   {
     path: '/setup',
@@ -277,6 +284,17 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/free-channels',
+    name: 'FreeChannels',
+    component: () => import('@/views/user/FreeChannelsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Free Channels',
+      titleKey: 'freeChannels.title',
+    }
+  },
+  {
     path: '/settings/mcp',
     name: 'MCP',
     component: () => import('@/views/user/MCPView.vue'),
@@ -472,6 +490,12 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'admin.users.title',
       descriptionKey: 'admin.users.description'
     }
+  },
+  {
+    path: '/admin/shared-channels',
+    name: 'AdminSharedChannels',
+    component: () => import('@/views/admin/SharedChannelsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'Shared Services', titleKey: 'admin.sharedChannels.title' }
   },
   {
     path: '/admin/groups',
@@ -824,7 +848,8 @@ router.beforeEach(async (to, _from, next) => {
   document.title = resolveRouteDocumentTitle(to, appStore.siteName, customMenuItems)
 
   // Check if route requires authentication
-  const requiresAuth = to.meta.requiresAuth !== false // Default to true
+  const localFreeChannelPreview = import.meta.env.DEV && to.path === '/free-channels' && to.query.preview === '1'
+  const requiresAuth = to.meta.requiresAuth !== false && !localFreeChannelPreview // Default to true
   const requiresAdmin = to.meta.requiresAdmin === true
 
   if (to.path === '/setup') {
@@ -885,7 +910,7 @@ router.beforeEach(async (to, _from, next) => {
       }
     }
     // Backend mode: block public pages for unauthenticated users (except login, key-usage, setup)
-    if (appStore.backendModeEnabled && !authStore.isAuthenticated) {
+    if (appStore.backendModeEnabled && !authStore.isAuthenticated && !localFreeChannelPreview) {
       const isAllowed = isBackendModePublicRouteAllowed(to.path, authStore.hasPendingAuthSession)
       if (!isAllowed) {
         next('/login')

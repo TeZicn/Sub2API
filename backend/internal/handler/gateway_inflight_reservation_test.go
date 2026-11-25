@@ -81,6 +81,21 @@ func TestReserveInflightBalance_UnpricedFailOpenByDefaultFailClosedOptIn(t *test
 	require.ErrorIs(t, err, service.ErrInsufficientBalance)
 }
 
+func TestSharedChannelDoesNotReservePersonalBalance(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Billing.InflightReservation.Enabled = true
+	cfg.Billing.InflightReservation.FailClosedOnUnpriced = true
+	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(billing.Stop)
+	id := int64(1)
+	key := &service.APIKey{User: &service.User{ID: 1}, SharedChannelMembershipID: &id}
+	est := &countingEstimator{}
+	_, done, err := reserveInflightBalanceCtx(context.Background(), billing, est, key, nil, tokenInflightEstimate("m", nil))
+	require.NoError(t, err)
+	done()
+	require.Zero(t, est.calls)
+}
+
 // handlerInflightCache 内存版余额缓存 + 在途预留（语义同 Redis Lua）。
 type handlerInflightCache struct {
 	service.BillingCache

@@ -90,6 +90,11 @@ func GroupID(v int64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldGroupID, v))
 }
 
+// SharedChannelMembershipID applies equality check predicate on the "shared_channel_membership_id" field. It's identical to SharedChannelMembershipIDEQ.
+func SharedChannelMembershipID(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldSharedChannelMembershipID, v))
+}
+
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
 func Status(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldStatus, v))
@@ -468,6 +473,56 @@ func GroupIDIsNil() predicate.APIKey {
 // GroupIDNotNil applies the NotNil predicate on the "group_id" field.
 func GroupIDNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldGroupID))
+}
+
+// SharedChannelMembershipIDEQ applies the EQ predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldSharedChannelMembershipID, v))
+}
+
+// SharedChannelMembershipIDNEQ applies the NEQ predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDNEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldSharedChannelMembershipID, v))
+}
+
+// SharedChannelMembershipIDIn applies the In predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldSharedChannelMembershipID, vs...))
+}
+
+// SharedChannelMembershipIDNotIn applies the NotIn predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDNotIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldSharedChannelMembershipID, vs...))
+}
+
+// SharedChannelMembershipIDGT applies the GT predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDGT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldSharedChannelMembershipID, v))
+}
+
+// SharedChannelMembershipIDGTE applies the GTE predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDGTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldSharedChannelMembershipID, v))
+}
+
+// SharedChannelMembershipIDLT applies the LT predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDLT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldSharedChannelMembershipID, v))
+}
+
+// SharedChannelMembershipIDLTE applies the LTE predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDLTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldSharedChannelMembershipID, v))
+}
+
+// SharedChannelMembershipIDIsNil applies the IsNil predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldSharedChannelMembershipID))
+}
+
+// SharedChannelMembershipIDNotNil applies the NotNil predicate on the "shared_channel_membership_id" field.
+func SharedChannelMembershipIDNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldSharedChannelMembershipID))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.

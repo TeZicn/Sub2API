@@ -344,6 +344,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	// Create usage log
+	cost = sharedChannelCustomerCost(apiKey, cost)
 	durationMs := int(result.Duration.Milliseconds())
 	accountRateMultiplier := account.BillingRateMultiplier()
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
@@ -423,6 +424,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		ImageSizeBreakdown:       imageSizeBreakdown,
 		NativeCompactionV2:       input.NativeCompactionV2,
 	}
+	sharedChannelBudgetCost, sharedChannelPricingBlocked := s.sharedChannelBudgetUsageCost(ctx, apiKey, result, firstUsageBillingModel(billingModels), pricingAt)
 	isVideoUsage := isGrokVideoUsageResult(result, billingModels)
 	if isVideoUsage {
 		usageLog.VideoCount = result.VideoCount
@@ -507,7 +509,20 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
-		s.deferredService.ScheduleLastUsedUpdate(account.ID)
+		if apiKey.SharedChannelMembershipID != nil && apiKey.SharedChannelBudgetEnabled {
+			_, billingErr := applyUsageBilling(ctx, usageLog.RequestID, usageLog, &postUsageBillingParams{
+				Cost: &CostBreakdown{}, User: user, APIKey: apiKey, Account: account,
+				RequestPayloadHash:          resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+				SharedChannelBudgetCost:     sharedChannelBudgetCost,
+				SharedChannelPricingBlocked: sharedChannelPricingBlocked,
+				SimpleModeKeyRateLimitOnly:  true,
+			}, s.billingDeps(), s.usageBillingRepo)
+			if billingErr != nil {
+				return billingErr
+			}
+		} else {
+			s.deferredService.ScheduleLastUsedUpdate(account.ID)
+		}
 		return nil
 	}
 
@@ -519,17 +534,19 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
-		Cost:                       cost,
-		User:                       user,
-		APIKey:                     apiKey,
-		Account:                    account,
-		Subscription:               subscription,
-		RequestPayloadHash:         resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-		IsSubscriptionBill:         isSubscriptionBilling && !simpleModeKeyRateLimitOnly,
-		AccountRateMultiplier:      accountRateMultiplier,
-		APIKeyService:              input.APIKeyService,
-		Platform:                   quotaPlatform,
-		SimpleModeKeyRateLimitOnly: simpleModeKeyRateLimitOnly,
+		Cost:                        cost,
+		User:                        user,
+		APIKey:                      apiKey,
+		Account:                     account,
+		Subscription:                subscription,
+		RequestPayloadHash:          resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+		IsSubscriptionBill:          isSubscriptionBilling && !simpleModeKeyRateLimitOnly,
+		AccountRateMultiplier:       accountRateMultiplier,
+		APIKeyService:               input.APIKeyService,
+		Platform:                    quotaPlatform,
+		SharedChannelBudgetCost:     sharedChannelBudgetCost,
+		SharedChannelPricingBlocked: sharedChannelPricingBlocked,
+		SimpleModeKeyRateLimitOnly:  simpleModeKeyRateLimitOnly,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {

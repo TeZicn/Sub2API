@@ -1,0 +1,70 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { createI18n } from 'vue-i18n'
+import en from '@/i18n/locales/en'
+import SharedChannelsView from '../SharedChannelsView.vue'
+import * as sharedChannelAPI from '@/api/admin/sharedChannels'
+
+vi.mock('@/api/admin/sharedChannels', () => ({ list: vi.fn(async () => []), save: vi.fn(async () => ({})) }))
+vi.mock('@/api/admin/groups', () => {
+  const getAll = vi.fn(async () => [
+    { id: 1, name: 'Exclusive group', platform: 'openai', status: 'active', is_exclusive: true, subscription_type: 'standard' },
+  ])
+  return { getAll, default: { getAll } }
+})
+enableAutoUnmount(afterEach)
+afterEach(() => vi.clearAllMocks())
+
+describe('SharedChannelsView end modes', () => {
+  it('keeps preview reads and edits local without calling admin APIs', async () => {
+    const wrapper = mount(SharedChannelsView, {
+      props: { preview: true },
+      global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: {
+        AppLayout: { template: '<div><slot /></div>' },
+      } },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Local preview')
+    expect(sharedChannelAPI.list).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(wrapper.find('input[maxlength="100"]').exists()).toBe(true))
+    await wrapper.find('input[maxlength="100"]').setValue('Edited preview')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Edited preview')
+    expect(sharedChannelAPI.save).not.toHaveBeenCalled()
+  })
+
+  it('saves time and budget as mutually exclusive conditions', async () => {
+    const wrapper = mount(SharedChannelsView, {
+      global: { plugins: [createI18n({ legacy: false, locale: 'en', messages: { en } })], stubs: {
+        AppLayout: { template: '<div><slot /></div>' },
+      } },
+    })
+    await flushPromises()
+    await wrapper.find('header button').trigger('click')
+    await wrapper.find('input[maxlength="100"]').setValue('Shared service')
+    await wrapper.find('select').setValue('1')
+    await wrapper.find('input[value="budget"]').setValue(true)
+    expect(wrapper.find('input[type="datetime-local"]').exists()).toBe(false)
+    await wrapper.find('input[placeholder="100"]').setValue('100')
+    await wrapper.find('input[min="0.000001"]').setValue('2')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(sharedChannelAPI.save).toHaveBeenLastCalledWith(null, expect.objectContaining({
+      expires_at: null, budget_limit: 100, budget_multiplier: 2,
+    }))
+
+    await wrapper.find('header button').trigger('click')
+    await wrapper.find('input[maxlength="100"]').setValue('Timed service')
+    await wrapper.find('select').setValue('1')
+    await wrapper.find('input[value="budget"]').setValue(true)
+    await wrapper.find('input[placeholder="100"]').setValue('200')
+    await wrapper.find('input[value="time"]').setValue(true)
+    expect(wrapper.find('input[placeholder="100"]').exists()).toBe(false)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(sharedChannelAPI.save).toHaveBeenLastCalledWith(null, expect.objectContaining({
+      expires_at: expect.any(String), budget_limit: null,
+    }))
+  })
+})

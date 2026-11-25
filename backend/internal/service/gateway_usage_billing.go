@@ -74,16 +74,18 @@ type usageLogBestEffortWriter interface {
 
 // postUsageBillingParams 统一扣费所需的参数
 type postUsageBillingParams struct {
-	Cost                  *CostBreakdown
-	User                  *User
-	APIKey                *APIKey
-	Account               *Account
-	Subscription          *UserSubscription
-	RequestPayloadHash    string
-	IsSubscriptionBill    bool
-	AccountRateMultiplier float64
-	APIKeyService         APIKeyQuotaUpdater
-	Platform              string // 来自 APIKey 关联 Group 的平台标识
+	Cost                        *CostBreakdown
+	User                        *User
+	APIKey                      *APIKey
+	Account                     *Account
+	Subscription                *UserSubscription
+	RequestPayloadHash          string
+	IsSubscriptionBill          bool
+	AccountRateMultiplier       float64
+	APIKeyService               APIKeyQuotaUpdater
+	Platform                    string // 来自 APIKey 关联 Group 的平台标识
+	SharedChannelBudgetCost     float64
+	SharedChannelPricingBlocked bool
 	// SimpleModeKeyRateLimitOnly opts the request into the simple-mode billing
 	// path that records only API-key 5h/1d/7d window usage. It must not trigger
 	// balance, subscription, account, platform, or lifetime-key-quota effects.
@@ -300,6 +302,11 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		AccountType:        p.Account.Type,
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
 	}
+	if p.APIKey.SharedChannelMembershipID != nil && p.APIKey.SharedChannelBudgetEnabled {
+		cmd.SharedChannelMembershipID = *p.APIKey.SharedChannelMembershipID
+		cmd.SharedChannelBudgetCost = p.SharedChannelBudgetCost
+		cmd.SharedChannelPricingBlocked = p.SharedChannelPricingBlocked
+	}
 	if usageLog != nil {
 		cmd.Model = usageLog.Model
 		cmd.BillingType = usageLog.BillingType
@@ -331,17 +338,19 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	// user-specific) rate multiplier consumes subscription quota at the expected
 	// speed. TotalCost remains the raw (pre-multiplier) value; downstream guards
 	// on "> 0" still correctly skip free subscriptions (RateMultiplier == 0).
-	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
-		cmd.SubscriptionID = &p.Subscription.ID
-		cmd.SubscriptionCost = p.Cost.ActualCost
-	} else if p.Cost.ActualCost > 0 {
-		cmd.BalanceCost = p.Cost.ActualCost
+	if !p.APIKey.IsSharedChannel() {
+		if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
+			cmd.SubscriptionID = &p.Subscription.ID
+			cmd.SubscriptionCost = p.Cost.ActualCost
+		} else if p.Cost.ActualCost > 0 {
+			cmd.BalanceCost = p.Cost.ActualCost
+		}
 	}
 
-	if p.shouldDeductAPIKeyQuota() {
+	if !p.APIKey.IsSharedChannel() && p.shouldDeductAPIKeyQuota() {
 		cmd.APIKeyQuotaCost = p.Cost.ActualCost
 	}
-	if p.shouldUpdateRateLimits() {
+	if !p.APIKey.IsSharedChannel() && p.shouldUpdateRateLimits() {
 		cmd.APIKeyRateLimitCost = p.Cost.ActualCost
 	}
 	if p.shouldUpdateAccountQuota() {
@@ -361,6 +370,9 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 
 	cmd := buildUsageBillingCommand(requestID, usageLog, p)
 	if cmd == nil || cmd.RequestID == "" || repo == nil {
+		if p.APIKey.IsSharedChannel() {
+			return false, errSharedChannelBillingUnavailable
+		}
 		if p.SimpleModeKeyRateLimitOnly {
 			return false, ErrSimpleModeKeyRateLimitBillingUnavailable
 		}
@@ -841,9 +853,11 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	// 创建使用日志
+	cost = sharedChannelCustomerCost(apiKey, cost)
 	accountRateMultiplier := account.BillingRateMultiplier()
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
 		requestedModel, multiplier, imageMultiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost)
+	sharedChannelBudgetCost, sharedChannelPricingBlocked := s.sharedChannelBudgetUsageCost(ctx, apiKey, result, billingModel, pricingAt)
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）。纯存储费不是一次模型请求，
 	// 账号统计成本回落 total_cost（官方存储价）。
@@ -863,7 +877,20 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple && !simpleModeKeyRateLimitOnly {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		logger.LegacyPrintf("service.gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
-		s.deferredService.ScheduleLastUsedUpdate(account.ID)
+		if apiKey.SharedChannelMembershipID != nil && apiKey.SharedChannelBudgetEnabled {
+			_, billingErr := applyUsageBilling(ctx, usageLog.RequestID, usageLog, &postUsageBillingParams{
+				Cost: &CostBreakdown{}, User: user, APIKey: apiKey, Account: account,
+				RequestPayloadHash:          resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+				SharedChannelBudgetCost:     sharedChannelBudgetCost,
+				SharedChannelPricingBlocked: sharedChannelPricingBlocked,
+				SimpleModeKeyRateLimitOnly:  true,
+			}, s.billingDeps(), s.usageBillingRepo)
+			if billingErr != nil {
+				return billingErr
+			}
+		} else {
+			s.deferredService.ScheduleLastUsedUpdate(account.ID)
+		}
 		return nil
 	}
 
@@ -879,17 +906,19 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	requestID := usageLog.RequestID
 	_, billingErr := applyUsageBilling(ctx, requestID, usageLog, &postUsageBillingParams{
-		Cost:                       cost,
-		User:                       user,
-		APIKey:                     apiKey,
-		Account:                    account,
-		Subscription:               subscription,
-		RequestPayloadHash:         resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-		IsSubscriptionBill:         isSubscriptionBilling && !simpleModeKeyRateLimitOnly,
-		AccountRateMultiplier:      accountRateMultiplier,
-		APIKeyService:              input.APIKeyService,
-		Platform:                   quotaPlatform,
-		SimpleModeKeyRateLimitOnly: simpleModeKeyRateLimitOnly,
+		Cost:                        cost,
+		User:                        user,
+		APIKey:                      apiKey,
+		Account:                     account,
+		Subscription:                subscription,
+		RequestPayloadHash:          resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+		IsSubscriptionBill:          isSubscriptionBilling && !simpleModeKeyRateLimitOnly,
+		AccountRateMultiplier:       accountRateMultiplier,
+		APIKeyService:               input.APIKeyService,
+		Platform:                    quotaPlatform,
+		SharedChannelBudgetCost:     sharedChannelBudgetCost,
+		SharedChannelPricingBlocked: sharedChannelPricingBlocked,
+		SimpleModeKeyRateLimitOnly:  simpleModeKeyRateLimitOnly,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {

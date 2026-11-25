@@ -289,6 +289,7 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
+	sharedChannels            SharedChannelRepository
 	apiKeyRepo                APIKeyRepository
 	userRepo                  UserRepository
 	groupRepo                 GroupRepository
@@ -373,6 +374,10 @@ func (s *APIKeyService) SetRateLimitCacheInvalidator(inv RateLimitCacheInvalidat
 
 func (s *APIKeyService) SetConcurrencyService(concurrencyService *ConcurrencyService) {
 	s.concurrencyService = concurrencyService
+}
+
+func (s *APIKeyService) SetSharedChannelRepository(repo SharedChannelRepository) {
+	s.sharedChannels = repo
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -525,10 +530,23 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 		// 检查用户是否可以绑定该分组
 		if !s.canUserBindGroup(ctx, user, group) {
+			memberships, err := s.sharedMemberships(ctx, userID)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range memberships {
+				if m.GroupID == *req.GroupID {
+					return s.createSharedChannelKey(ctx, m.PublicationID, userID, req)
+				}
+			}
 			return nil, ErrGroupNotAllowed
 		}
 	}
 
+	return s.mintAPIKey(ctx, userID, req, nil)
+}
+
+func (s *APIKeyService) mintAPIKey(ctx context.Context, userID int64, req CreateAPIKeyRequest, membershipID *int64) (*APIKey, error) {
 	var key string
 
 	// 判断是否使用自定义Key
@@ -570,18 +588,19 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	// 创建API Key记录
 	apiKey := &APIKey{
-		UserID:      userID,
-		Key:         key,
-		Name:        html.EscapeString(req.Name),
-		GroupID:     req.GroupID,
-		Status:      StatusActive,
-		IPWhitelist: req.IPWhitelist,
-		IPBlacklist: req.IPBlacklist,
-		Quota:       req.Quota,
-		QuotaUsed:   0,
-		RateLimit5h: req.RateLimit5h,
-		RateLimit1d: req.RateLimit1d,
-		RateLimit7d: req.RateLimit7d,
+		UserID:                    userID,
+		Key:                       key,
+		Name:                      html.EscapeString(req.Name),
+		GroupID:                   req.GroupID,
+		SharedChannelMembershipID: membershipID,
+		Status:                    StatusActive,
+		IPWhitelist:               req.IPWhitelist,
+		IPBlacklist:               req.IPBlacklist,
+		Quota:                     req.Quota,
+		QuotaUsed:                 0,
+		RateLimit5h:               req.RateLimit5h,
+		RateLimit1d:               req.RateLimit1d,
+		RateLimit7d:               req.RateLimit7d,
 	}
 
 	// Set expiration time if specified
@@ -594,7 +613,9 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		return nil, fmt.Errorf("create api key: %w", err)
 	}
 
-	s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	if membershipID == nil {
+		s.InvalidateAuthCacheByKey(ctx, apiKey.Key)
+	}
 	s.compileAPIKeyIPRules(apiKey)
 
 	return apiKey, nil
@@ -610,6 +631,9 @@ func (s *APIKeyService) List(ctx context.Context, userID int64, params paginatio
 	if err != nil {
 		return nil, nil, fmt.Errorf("list api keys: %w", err)
 	}
+	if err := s.decorateSharedKeys(ctx, userID, keys); err != nil {
+		return nil, nil, err
+	}
 	s.fillCurrentConcurrency(ctx, keys)
 	return keys, pagination, nil
 }
@@ -623,6 +647,9 @@ func (s *APIKeyService) listByCurrentConcurrency(ctx context.Context, userID int
 	keys, err := repo.ListAllByUserID(ctx, userID, filters)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list api keys: %w", err)
+	}
+	if err := s.decorateSharedKeys(ctx, userID, keys); err != nil {
+		return nil, nil, err
 	}
 	s.fillCurrentConcurrency(ctx, keys)
 	sortAPIKeysByCurrentConcurrency(keys, params.NormalizedSortOrder(pagination.SortOrderDesc))
@@ -729,6 +756,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 	}
 	s.compileAPIKeyIPRules(apiKey)
 	if apiKey != nil {
+		if err := s.decorateSharedKey(ctx, apiKey); err != nil {
+			return nil, err
+		}
 		apiKey.CurrentConcurrency = s.currentConcurrencyForAPIKey(ctx, apiKey.ID)
 	}
 	return apiKey, nil
@@ -736,6 +766,14 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
+	apiKey, err := s.getByKeyForAuth(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return s.authorizeSharedKey(ctx, apiKey)
+}
+
+func (s *APIKeyService) getByKeyForAuth(ctx context.Context, key string) (*APIKey, error) {
 	// 非 UTF-8 的 key 不可能存在（生成和自定义的 key 都是 ASCII），且 Postgres 会以
 	// invalid byte sequence 拒绝该参数；直接按不存在处理，避免返回 500。
 	if len(key) == 0 || len(key) > MaxAPIKeyCredentialBytes || !utf8.ValidString(key) {
@@ -820,6 +858,19 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		}
 	}
 
+	if apiKey.SharedChannelMembershipID != nil {
+		if req.GroupID != nil && (apiKey.GroupID == nil || *req.GroupID != *apiKey.GroupID) {
+			return nil, ErrSharedChannelKeyGroup
+		}
+		m, err := s.lookupSharedKeyMembership(ctx, apiKey)
+		if err != nil {
+			return nil, err
+		}
+		if m == nil {
+			return nil, ErrSharedChannelKeyEnded
+		}
+	}
+
 	// fields 只登记本次请求真正要改的列。quota_used 与 usage_5h/1d/7d 由计费热路径
 	// 原子递增，除非用户显式点了"重置"，否则这里不用快照把它们写回去。
 	var fields APIKeyUpdateFields
@@ -833,7 +884,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		fields.Name = true
 	}
 
-	if req.GroupID != nil {
+	if req.GroupID != nil && apiKey.SharedChannelMembershipID == nil {
 		// 验证分组权限
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
@@ -1072,10 +1123,19 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 		subscribedGroupIDs[sub.GroupID] = true
 	}
 
+	memberships, err := s.sharedMemberships(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	sharedGroups := make(map[int64]bool, len(memberships))
+	for _, m := range memberships {
+		sharedGroups[m.GroupID] = true
+	}
+
 	// 过滤出用户有权限的分组
 	availableGroups := make([]Group, 0)
 	for _, group := range allGroups {
-		if s.canUserBindGroupInternal(user, &group, subscribedGroupIDs) {
+		if sharedGroups[group.ID] || s.canUserBindGroupInternal(user, &group, subscribedGroupIDs) {
 			availableGroups = append(availableGroups, group)
 		}
 	}

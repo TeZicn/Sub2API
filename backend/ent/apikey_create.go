@@ -99,6 +99,20 @@ func (_c *APIKeyCreate) SetNillableGroupID(v *int64) *APIKeyCreate {
 	return _c
 }
 
+// SetSharedChannelMembershipID sets the "shared_channel_membership_id" field.
+func (_c *APIKeyCreate) SetSharedChannelMembershipID(v int64) *APIKeyCreate {
+	_c.mutation.SetSharedChannelMembershipID(v)
+	return _c
+}
+
+// SetNillableSharedChannelMembershipID sets the "shared_channel_membership_id" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableSharedChannelMembershipID(v *int64) *APIKeyCreate {
+	if v != nil {
+		_c.SetSharedChannelMembershipID(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *APIKeyCreate) SetStatus(v string) *APIKeyCreate {
 	_c.mutation.SetStatus(v)
@@ -530,6 +544,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 		_node.Name = value
+	}
+	if value, ok := _c.mutation.SharedChannelMembershipID(); ok {
+		_spec.SetField(apikey.FieldSharedChannelMembershipID, field.TypeInt64, value)
+		_node.SharedChannelMembershipID = &value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -1076,6 +1094,9 @@ func (u *APIKeyUpsertOne) UpdateNewValues() *APIKeyUpsertOne {
 	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(apikey.FieldCreatedAt)
+		}
+		if _, exists := u.create.mutation.SharedChannelMembershipID(); exists {
+			s.SetIgnore(apikey.FieldSharedChannelMembershipID)
 		}
 	}))
 	return u
@@ -1713,6 +1734,9 @@ func (u *APIKeyUpsertBulk) UpdateNewValues() *APIKeyUpsertBulk {
 		for _, b := range u.create.builders {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(apikey.FieldCreatedAt)
+			}
+			if _, exists := b.mutation.SharedChannelMembershipID(); exists {
+				s.SetIgnore(apikey.FieldSharedChannelMembershipID)
 			}
 		}
 	}))

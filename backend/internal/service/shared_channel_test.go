@@ -39,6 +39,32 @@ func TestSharedChannelMembershipShare(t *testing.T) {
 	}
 }
 
+func TestSharedChannelHealthState(t *testing.T) {
+	tests := []struct {
+		name       string
+		requests   int
+		failures   int
+		rateLimits int
+		want       SharedChannelHealthStatus
+	}{
+		{name: "no requests", want: SharedChannelHealthIdle},
+		{name: "healthy traffic", requests: 10, want: SharedChannelHealthSuccess},
+		{name: "rate limited traffic", requests: 10, rateLimits: 8, want: SharedChannelHealthDegraded},
+		{name: "isolated provider failure", requests: 10, failures: 1, want: SharedChannelHealthDegraded},
+		{name: "four failed requests remain degraded", requests: 4, failures: 4, want: SharedChannelHealthDegraded},
+		{name: "five failures below half remain degraded", requests: 11, failures: 5, want: SharedChannelHealthDegraded},
+		{name: "five failures at half are unhealthy", requests: 10, failures: 5, want: SharedChannelHealthFailure},
+		{name: "five failures above half are unhealthy", requests: 8, failures: 5, want: SharedChannelHealthFailure},
+		{name: "limits do not change red threshold", requests: 10, failures: 5, rateLimits: 20, want: SharedChannelHealthFailure},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SharedChannelHealthState(tt.requests, tt.failures, tt.rateLimits)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestSharedChannelPersonalCapAndEvenShares(t *testing.T) {
 	for _, tt := range []struct {
 		members int

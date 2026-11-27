@@ -92,9 +92,25 @@
               <p class="mt-0.5 text-[10px] text-gray-400 dark:text-dark-400">{{ t('freeChannels.historySource') }}</p>
             </div>
           </div>
-          <div class="flex shrink-0 items-center gap-2.5 text-[9px] font-medium text-gray-400 dark:text-dark-400" aria-hidden="true">
-            <span class="inline-flex items-center gap-1"><i class="h-1.5 w-1.5 rounded-full bg-emerald-500" />{{ t('freeChannels.successShort') }}</span>
-            <span class="inline-flex items-center gap-1"><i class="h-1.5 w-1.5 rounded-full bg-rose-500" />{{ t('freeChannels.failureShort') }}</span>
+          <div class="flex shrink-0 flex-col items-end gap-1.5">
+            <span
+              data-testid="shared-channel-recent-status"
+              :data-status="channel.recentStatus.status"
+              :title="recentStatusTooltip"
+              :aria-label="t('freeChannels.recentStatusLabel', { status: t(`freeChannels.recentStatus.${channel.recentStatus.status}`) })"
+              class="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold"
+              :class="recentStatusClass"
+            >
+              <i class="h-1.5 w-1.5 rounded-full" :class="recentStatusDotClass" aria-hidden="true" />
+              {{ t(`freeChannels.recentStatus.${channel.recentStatus.status}`) }}
+              <span class="font-normal opacity-70">· {{ t('freeChannels.recentWindow') }}</span>
+            </span>
+            <span class="flex items-center gap-2 text-[9px] font-medium text-gray-400 dark:text-dark-400" aria-hidden="true">
+              <span class="inline-flex items-center gap-1"><i class="h-1.5 w-1.5 rounded-full bg-emerald-500" />{{ t('freeChannels.successShort') }}</span>
+              <span class="inline-flex items-center gap-1"><i class="h-1.5 w-1.5 rounded-full bg-amber-400" />{{ t('freeChannels.degradedShort') }}</span>
+              <span class="inline-flex items-center gap-1"><i class="h-1.5 w-1.5 rounded-full bg-rose-500" />{{ t('freeChannels.failureShort') }}</span>
+              <span class="inline-flex items-center gap-1"><i class="h-1.5 w-1.5 rounded-full bg-gray-300 dark:bg-dark-600" />{{ t('freeChannels.idleShort') }}</span>
+            </span>
           </div>
         </div>
         <div class="min-w-0 rounded-2xl border border-gray-100 bg-gray-50/70 px-2.5 pb-2.5 pt-3 dark:border-dark-700/80 dark:bg-dark-900/35 sm:px-4">
@@ -209,6 +225,33 @@ const providerTileClass = computed(() => {
   }
   return classes[props.channel.provider] ?? 'bg-gray-50 text-gray-500 dark:bg-dark-700 dark:text-dark-200'
 })
+
+const recentStatusClass = computed(() => {
+  const classes = {
+    idle: 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-dark-200',
+    success: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300',
+    degraded: 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300',
+    failure: 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300',
+  }
+  return classes[props.channel.recentStatus.status]
+})
+
+const recentStatusDotClass = computed(() => {
+  const classes = {
+    idle: 'bg-gray-400 dark:bg-dark-400',
+    success: 'bg-emerald-500',
+    degraded: 'bg-amber-500',
+    failure: 'bg-rose-500',
+  }
+  return classes[props.channel.recentStatus.status]
+})
+
+const recentStatusTooltip = computed(() => t('freeChannels.recentTooltip', {
+  status: t(`freeChannels.recentStatus.${props.channel.recentStatus.status}`),
+  requests: props.channel.recentStatus.requests,
+  failures: props.channel.recentStatus.failures,
+  rateLimits: props.channel.recentStatus.rateLimits,
+}))
 
 const availabilityClass = computed(() => {
   if (props.channel.availability === 'open') return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20'

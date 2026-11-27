@@ -134,7 +134,8 @@ function toCardChannel(channel: SharedChannel): CardChannel {
       hour: index,
       requests: hour?.requests ?? 0,
       failures: hour?.failures ?? 0,
-      status: !hour || hour.requests === 0 ? 'idle' as const : hour.failures > 0 ? 'failure' as const : 'success' as const,
+      rateLimits: hour?.rate_limits ?? 0,
+      status: hour?.status ?? 'idle' as const,
     }
   })
   const usernames = [...channel.usernames]
@@ -150,6 +151,12 @@ function toCardChannel(channel: SharedChannel): CardChannel {
     maxConcurrency: channel.max_concurrency,
     usernames,
     currentUserJoined: channel.joined,
+    recentStatus: {
+      requests: channel.recent.requests,
+      failures: channel.recent.failures,
+      rateLimits: channel.recent.rate_limits,
+      status: channel.recent.status,
+    },
     hourlyStatuses,
     apiID: channel.id,
   } as CardChannel

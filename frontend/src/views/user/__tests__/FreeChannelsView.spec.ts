@@ -153,10 +153,27 @@ describe('FreeChannelsView', () => {
   function publishedChannel(overrides: Partial<SharedChannel> = {}): SharedChannel {
     return {
       id: 1, name: 'Live service', platform: 'openai', models: ['gpt-5'], max_concurrency: 8,
-      expires_at: null, budget_limit: 100, budget_used: 20, usernames: [], joined: false, share: 5, hours: [],
+      expires_at: null, budget_limit: 100, budget_used: 20, usernames: [], joined: false, share: 5,
+      recent: { requests: 0, failures: 0, rate_limits: 0, status: 'idle' }, hours: [],
       ...overrides,
     }
   }
+
+  it('shows the recent five-minute health and four-state hourly history from the API', async () => {
+    vi.mocked(sharedChannelsAPI.list).mockResolvedValue([publishedChannel({
+      recent: { requests: 14, failures: 1, rate_limits: 4, status: 'degraded' },
+      hours: [{
+        started_at: new Date().toISOString(), requests: 14, failures: 1, rate_limits: 4, status: 'degraded',
+      }],
+    })])
+    const wrapper = mountView(false)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="shared-channel-recent-status"]').attributes('data-status')).toBe('degraded')
+    expect(wrapper.get('[data-testid="shared-channel-recent-status"]').text()).toContain('Intermittent')
+    expect(wrapper.findAll('[data-testid="hour-status-cell"]').some(cell => cell.attributes('data-status') === 'degraded')).toBe(true)
+    expect(wrapper.findAll('[data-testid="hour-status-cell"]')[0]!.attributes('title')).toContain('rate limits')
+  })
 
   it('removes an expired card and its pending join dialog while the page stays open', async () => {
     vi.useFakeTimers()

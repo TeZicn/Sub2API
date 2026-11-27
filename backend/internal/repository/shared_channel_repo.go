@@ -100,42 +100,94 @@ func (r *sharedChannelRepository) ListPublished(ctx context.Context, userID int6
 	if err := rows.Err(); err != nil || len(ids) == 0 {
 		return result, err
 	}
-	// 沿用网关记录的错误归属，只统计最终上游失败；恢复成功的尝试和用户业务限制不影响状态。
+	// 同一 API Key 的请求和恢复事件按 request ID 合并，避免重试重复计数。
 	stats, err := r.db.QueryContext(ctx, `WITH linked AS (
 		SELECT ak.id AS key_id, m.publication_id
 		FROM shared_channel_memberships m JOIN api_keys ak ON ak.shared_channel_membership_id = m.id
 		WHERE m.publication_id = ANY($1)
-	), events AS (
-		SELECT k.publication_id, date_trunc('hour', u.created_at) AS bucket, FALSE AS failed FROM linked k
+	), ops_events AS (
+		SELECT k.publication_id, k.key_id, e.id, NULLIF(e.request_id, '') AS request_id, e.created_at,
+			e.status_code, COALESCE(e.upstream_status_code, e.status_code) AS effective_status,
+			EXISTS (
+				SELECT 1 FROM jsonb_array_elements(
+					CASE WHEN jsonb_typeof(e.upstream_errors) = 'array' THEN e.upstream_errors ELSE '[]'::jsonb END
+				) AS attempts(value)
+				WHERE value->>'upstream_status_code' IN ('429', '529')
+			) AS has_rate_limit_attempt
+		FROM linked k JOIN ops_error_logs e ON e.api_key_id = k.key_id
+		WHERE e.created_at >= date_trunc('hour', statement_timestamp()) - interval '23 hours'
+			AND e.error_owner = 'provider' AND NOT e.is_business_limited
+			AND (e.status_code < 400 OR (e.status_code >= 400 AND e.status_code <> 499))
+	), raw_events AS (
+		SELECT k.publication_id, k.key_id, NULLIF(u.request_id, '') AS request_id,
+			CASE WHEN NULLIF(u.request_id, '') IS NULL THEN u.id ELSE NULL END AS fallback_id,
+			u.created_at, FALSE AS failed, FALSE AS rate_limited
+		FROM linked k
 		JOIN usage_logs u ON u.api_key_id = k.key_id
 		WHERE u.created_at >= date_trunc('hour', statement_timestamp()) - interval '23 hours'
 		UNION ALL
-		SELECT k.publication_id, date_trunc('hour', e.created_at), TRUE FROM linked k
-		JOIN ops_error_logs e ON e.api_key_id = k.key_id
-		WHERE e.created_at >= date_trunc('hour', statement_timestamp()) - interval '23 hours'
-			AND e.status_code >= 400 AND e.status_code <> 499
-			AND e.error_owner = 'provider' AND NOT e.is_business_limited
+		SELECT publication_id, key_id, request_id,
+			CASE WHEN request_id IS NULL THEN -id ELSE NULL END,
+			created_at, FALSE, TRUE
+		FROM ops_events WHERE status_code < 400 AND has_rate_limit_attempt
+		UNION ALL
+		SELECT publication_id, key_id, request_id,
+			CASE WHEN request_id IS NULL THEN -id ELSE NULL END,
+			created_at, effective_status NOT IN (429, 529),
+			(effective_status IN (429, 529) OR has_rate_limit_attempt)
+		FROM ops_events WHERE status_code >= 400 AND status_code <> 499
+	), request_events AS (
+		SELECT publication_id, key_id, request_id, fallback_id, max(created_at) AS created_at,
+			bool_or(failed) AS failed, bool_or(rate_limited) AS rate_limited
+		FROM raw_events
+		GROUP BY publication_id, key_id, request_id, fallback_id
 	), hours AS (
 		SELECT generate_series(date_trunc('hour', statement_timestamp()) - interval '23 hours',
 			date_trunc('hour', statement_timestamp()), interval '1 hour') AS bucket
+	), stats AS (
+		SELECT channels.publication_id, hours.bucket, FALSE AS is_recent,
+			count(events.created_at)::integer AS requests,
+			count(events.created_at) FILTER (WHERE events.failed)::integer AS failures,
+			count(events.created_at) FILTER (WHERE events.rate_limited)::integer AS rate_limits
+		FROM unnest($1::bigint[]) AS channels(publication_id)
+		CROSS JOIN hours
+		LEFT JOIN request_events events ON events.publication_id = channels.publication_id
+			AND events.created_at >= hours.bucket AND events.created_at < hours.bucket + interval '1 hour'
+		GROUP BY channels.publication_id, hours.bucket
+		UNION ALL
+		SELECT channels.publication_id, NULL::timestamptz, TRUE,
+			count(events.created_at)::integer,
+			count(events.created_at) FILTER (WHERE events.failed)::integer,
+			count(events.created_at) FILTER (WHERE events.rate_limited)::integer
+		FROM unnest($1::bigint[]) AS channels(publication_id)
+		LEFT JOIN request_events events ON events.publication_id = channels.publication_id
+			AND events.created_at > statement_timestamp() - interval '5 minutes'
+		GROUP BY channels.publication_id
 	)
-	SELECT channels.publication_id, hours.bucket, count(events.bucket),
-		count(events.bucket) FILTER (WHERE events.failed)
-	FROM unnest($1::bigint[]) AS channels(publication_id)
-	CROSS JOIN hours
-	LEFT JOIN events ON events.publication_id = channels.publication_id AND events.bucket = hours.bucket
-	GROUP BY channels.publication_id, hours.bucket ORDER BY channels.publication_id, hours.bucket`, pq.Array(ids))
+	SELECT publication_id, bucket, is_recent, requests, failures, rate_limits
+	FROM stats ORDER BY publication_id, is_recent, bucket`, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = stats.Close() }()
 	for stats.Next() {
 		var id int64
+		var isRecent bool
+		var bucket sql.NullTime
 		var hour service.SharedChannelHour
-		if err := stats.Scan(&id, &hour.StartedAt, &hour.Requests, &hour.Failures); err != nil {
+		if err := stats.Scan(&id, &bucket, &isRecent, &hour.Requests, &hour.Failures, &hour.RateLimits); err != nil {
 			return nil, err
 		}
 		i := positions[id]
+		status := service.SharedChannelHealthState(hour.Requests, hour.Failures, hour.RateLimits)
+		if isRecent {
+			result[i].Recent = service.SharedChannelHealth{
+				Requests: hour.Requests, Failures: hour.Failures, RateLimits: hour.RateLimits, Status: status,
+			}
+			continue
+		}
+		hour.StartedAt = bucket.Time
+		hour.Status = status
 		result[i].Hours = append(result[i].Hours, hour)
 	}
 	return result, stats.Err()

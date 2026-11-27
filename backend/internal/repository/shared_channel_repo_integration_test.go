@@ -442,31 +442,47 @@ func TestSharedChannelStatusCountsOnlyFinalProviderFailures(t *testing.T) {
 	var bucket time.Time
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT date_trunc('hour', statement_timestamp()) - interval '1 hour'`).Scan(&bucket))
 	for _, sample := range []struct {
-		name, phase, owner string
-		status             int
-		business, counted  bool
+		name, phase, owner            string
+		status                        int
+		business, counted             bool
+		failure, rateLimit, recovered bool
 	}{
-		{"upstream 500", "upstream", "provider", 500, false, true},
-		{"upstream 429", "upstream", "provider", 429, false, true},
-		{"upstream auth", "upstream", "provider", 401, false, true},
-		{"account token failure", "account_auth", "provider", 502, false, true},
-		{"transport timeout", "network", "provider", 504, false, true},
-		{"stream interrupted", "upstream", "provider", 502, false, true},
-		{"invalid client request", "request", "client", 400, false, false},
-		{"invalid client key", "auth", "client", 401, true, false},
-		{"local limit", "concurrency", "platform", 429, true, false},
-		{"local quota", "billing", "platform", 403, true, false},
-		{"no available accounts", "routing", "platform", 503, true, false},
-		{"internal error", "internal", "platform", 500, false, false},
-		{"recovered retry", "upstream", "provider", 200, false, false},
-		{"client cancelled", "network", "provider", 499, false, false},
-		{"request policy", "request", "provider", 400, true, false},
+		{"upstream 500", "upstream", "provider", 500, false, true, true, false, false},
+		{"upstream 429", "upstream", "provider", 429, false, true, false, true, false},
+		{"upstream auth", "upstream", "provider", 401, false, true, true, false, false},
+		{"account token failure", "account_auth", "provider", 502, false, true, true, false, false},
+		{"transport timeout", "network", "provider", 504, false, true, true, false, false},
+		{"stream interrupted", "upstream", "provider", 502, false, true, true, false, false},
+		{"invalid client request", "request", "client", 400, false, false, false, false, false},
+		{"invalid client key", "auth", "client", 401, true, false, false, false, false},
+		{"local limit", "concurrency", "platform", 429, true, false, false, false, false},
+		{"local quota", "billing", "platform", 403, true, false, false, false, false},
+		{"no available accounts", "routing", "platform", 503, true, false, false, false, false},
+		{"internal error", "internal", "platform", 500, false, false, false, false, false},
+		{"recovered retry limit", "upstream", "provider", 200, false, true, false, true, true},
+		{"client cancelled", "network", "provider", 499, false, false, false, false, false},
+		{"request policy", "request", "provider", 400, true, false, false, false, false},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
+			requestID := uuid.NewString()
+			if sample.recovered {
+				account := mustCreateAccount(t, testEntClient(t), &service.Account{Name: "shared-recovered-" + uuid.NewString()})
+				_, err := newUsageLogRepositoryWithSQL(testEntClient(t), integrationDB).Create(ctx, &service.UsageLog{
+					UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, RequestID: requestID,
+					Model: "test-model", InputTokens: 1, CreatedAt: bucket.Add(time.Minute),
+				})
+				require.NoError(t, err)
+			}
+			var upstreamErrorsJSON *string
+			if sample.recovered {
+				upstreamErrors := `[{"upstream_status_code":429,"kind":"http_error"}]`
+				upstreamErrorsJSON = &upstreamErrors
+			}
 			id, err := ops.InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{
-				RequestID: uuid.NewString(), APIKeyID: &key.ID, UserID: &user.ID,
+				RequestID: requestID, APIKeyID: &key.ID, UserID: &user.ID,
 				ErrorPhase: sample.phase, ErrorOwner: sample.owner, ErrorType: "api_error", Severity: "P2",
 				StatusCode: sample.status, IsBusinessLimited: sample.business, CreatedAt: bucket.Add(time.Minute),
+				UpstreamErrorsJSON: upstreamErrorsJSON,
 			})
 			require.NoError(t, err)
 			t.Cleanup(func() {
@@ -481,12 +497,22 @@ func TestSharedChannelStatusCountsOnlyFinalProviderFailures(t *testing.T) {
 				}
 				require.Len(t, channel.Hours, 24)
 				for _, hour := range channel.Hours {
-					want := 0
+					wantRequests, wantFailures, wantRateLimits := 0, 0, 0
 					if hour.StartedAt.Equal(bucket) && sample.counted {
-						want = 1
+						wantRequests = 1
+						if sample.failure {
+							wantFailures = 1
+						}
+						if sample.rateLimit {
+							wantRateLimits = 1
+						}
 					}
-					require.Equal(t, want, hour.Failures)
-					require.Equal(t, want, hour.Requests)
+					require.Equal(t, wantFailures, hour.Failures)
+					require.Equal(t, wantRequests, hour.Requests)
+					require.Equal(t, wantRateLimits, hour.RateLimits)
+					if sample.counted && sample.rateLimit {
+						require.Equal(t, service.SharedChannelHealthDegraded, hour.Status)
+					}
 				}
 				return
 			}
@@ -514,6 +540,41 @@ func TestSharedChannelStatusCountsOnlyFinalProviderFailures(t *testing.T) {
 		}
 	}
 	require.True(t, found, "successful upstream request must appear in its hour")
+}
+
+func TestSharedChannelRecentHealthDeduplicatesRecoveredThrottle(t *testing.T) {
+	ctx := context.Background()
+	repo, publication, user := sharedChannelFixture(t, false)
+	key, _ := joinSharedChannelKey(t, repo, publication.ID, user.ID)
+	account := mustCreateAccount(t, testEntClient(t), &service.Account{Name: "shared-recent-" + uuid.NewString()})
+	requestID := uuid.NewString()
+	var createdAt time.Time
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT statement_timestamp()`).Scan(&createdAt))
+	_, err := newUsageLogRepositoryWithSQL(testEntClient(t), integrationDB).Create(ctx, &service.UsageLog{
+		UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, RequestID: requestID,
+		Model: "test-model", InputTokens: 1, CreatedAt: createdAt,
+	})
+	require.NoError(t, err)
+	upstreamErrors := `[{"upstream_status_code":429,"kind":"http_error"}]`
+	_, err = NewOpsRepository(integrationDB).InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{
+		RequestID: requestID, APIKeyID: &key.ID, UserID: &user.ID,
+		ErrorPhase: "upstream", ErrorOwner: "provider", ErrorType: "api_error", Severity: "P2",
+		StatusCode: 200, CreatedAt: createdAt, UpstreamErrorsJSON: &upstreamErrors,
+	})
+	require.NoError(t, err)
+
+	channels, err := repo.ListPublished(ctx, user.ID)
+	require.NoError(t, err)
+	for _, channel := range channels {
+		if channel.ID != publication.ID {
+			continue
+		}
+		require.Equal(t, service.SharedChannelHealth{
+			Requests: 1, Failures: 0, RateLimits: 1, Status: service.SharedChannelHealthDegraded,
+		}, channel.Recent)
+		return
+	}
+	t.Fatal("publication missing")
 }
 
 func TestSharedChannelParticipantNameUsesEmailPrefixWhenUsernameBlank(t *testing.T) {

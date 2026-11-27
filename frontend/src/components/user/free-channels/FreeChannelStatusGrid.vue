@@ -7,6 +7,7 @@
         role="img"
         tabindex="0"
         data-testid="hour-status-cell"
+        :data-status="bucket.status"
         class="h-7 min-w-0 rounded-[5px] outline-none transition duration-150 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-dark-800 sm:h-8"
         :class="statusClass(bucket.status)"
         :title="tooltip(bucket)"
@@ -33,6 +34,7 @@ const { t } = useI18n()
 
 function statusClass(status: HourlyRequestStatus['status']) {
   if (status === 'success') return 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-500'
+  if (status === 'degraded') return 'bg-amber-400 hover:bg-amber-500 focus-visible:ring-amber-500'
   if (status === 'failure') return 'bg-rose-500 hover:bg-rose-600 focus-visible:ring-rose-500'
   return 'bg-gray-200 hover:bg-gray-300 focus-visible:ring-gray-400 dark:bg-dark-600 dark:hover:bg-dark-500'
 }
@@ -47,6 +49,8 @@ function tooltip(bucket: HourlyRequestStatus) {
     end: 24 - bucket.hour,
     requests: bucket.requests,
     failures: bucket.failures,
+    rateLimits: bucket.rateLimits,
+    status: t(`freeChannels.recentStatus.${bucket.status}`),
   })
 }
 </script>

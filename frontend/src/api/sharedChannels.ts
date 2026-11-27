@@ -1,9 +1,20 @@
 import { apiClient } from './client'
 
+export type SharedChannelHealthStatus = 'idle' | 'success' | 'degraded' | 'failure'
+
+export interface SharedChannelHealth {
+  requests: number
+  failures: number
+  rate_limits: number
+  status: SharedChannelHealthStatus
+}
+
 export interface SharedChannelHour {
   started_at: string
   requests: number
   failures: number
+  rate_limits: number
+  status: SharedChannelHealthStatus
 }
 
 export interface SharedChannel {
@@ -18,6 +29,7 @@ export interface SharedChannel {
   usernames: string[]
   joined: boolean
   share: number
+  recent: SharedChannelHealth
   hours: SharedChannelHour[]
 }
 

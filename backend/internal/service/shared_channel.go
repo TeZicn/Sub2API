@@ -42,9 +42,40 @@ type SharedChannel struct {
 }
 
 type SharedChannelHour struct {
-	StartedAt time.Time `json:"started_at"`
-	Requests  int       `json:"requests"`
-	Failures  int       `json:"failures"`
+	StartedAt  time.Time                 `json:"started_at"`
+	Requests   int                       `json:"requests"`
+	Failures   int                       `json:"failures"`
+	RateLimits int                       `json:"rate_limits"`
+	Status     SharedChannelHealthStatus `json:"status"`
+}
+
+type SharedChannelHealthStatus string
+
+const (
+	SharedChannelHealthIdle     SharedChannelHealthStatus = "idle"
+	SharedChannelHealthSuccess  SharedChannelHealthStatus = "success"
+	SharedChannelHealthDegraded SharedChannelHealthStatus = "degraded"
+	SharedChannelHealthFailure  SharedChannelHealthStatus = "failure"
+)
+
+type SharedChannelHealth struct {
+	Requests   int                       `json:"requests"`
+	Failures   int                       `json:"failures"`
+	RateLimits int                       `json:"rate_limits"`
+	Status     SharedChannelHealthStatus `json:"status"`
+}
+
+func SharedChannelHealthState(requests, failures, rateLimits int) SharedChannelHealthStatus {
+	if requests == 0 {
+		return SharedChannelHealthIdle
+	}
+	if failures >= 5 && failures*2 >= requests {
+		return SharedChannelHealthFailure
+	}
+	if failures > 0 || rateLimits > 0 {
+		return SharedChannelHealthDegraded
+	}
+	return SharedChannelHealthSuccess
 }
 
 // PublishedSharedChannel does not expose private group details or member IDs.
@@ -61,6 +92,7 @@ type PublishedSharedChannel struct {
 	Usernames      []string            `json:"usernames"`
 	Joined         bool                `json:"joined"`
 	Share          int                 `json:"share"`
+	Recent         SharedChannelHealth `json:"recent"`
 	Hours          []SharedChannelHour `json:"hours"`
 }
 
